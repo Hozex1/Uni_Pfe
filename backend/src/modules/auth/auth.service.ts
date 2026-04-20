@@ -1,5 +1,7 @@
 import prisma from "../../config/database";
-import type { Niveau, Prisma } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
+
+type Niveau = "L1" | "L2" | "L3" | "M1" | "M2";
 import {
   hashPassword,
   comparePasswords,
@@ -408,14 +410,14 @@ export const createUserByAdmin = async (data: {
         }
 
         if (Number.isInteger(data.specialiteId) && (data.specialiteId as number) > 0) {
-          const invalidSpecialiteModules = modules.filter((module) => module.specialiteId !== data.specialiteId);
+          const invalidSpecialiteModules = modules.filter((module: any) => module.specialiteId !== data.specialiteId);
           if (invalidSpecialiteModules.length > 0) {
             throw new AuthServiceError("Selected modules must belong to the selected specialite");
           }
         }
 
         await tx.enseignement.createMany({
-          data: modules.map((module) => ({
+          data: modules.map((module: any) => ({
             enseignantId: enseignant.id,
             moduleId: module.id,
             anneeUniversitaire: data.anneeUniversitaire?.trim() || undefined,
@@ -488,12 +490,12 @@ export const getAcademicManagementOptions = async (): Promise<{
   ]);
 
   return {
-    specialites: specialites.map((item) => ({
+    specialites: specialites.map((item: any) => ({
       id: item.id,
       nom: item.nom_ar || item.nom_en || `Specialite ${item.id}`,
       niveau: item.niveau ?? null,
     })),
-    promos: promos.map((item) => ({
+    promos: promos.map((item: any) => ({
       id: item.id,
       nom: item.nom_ar || item.nom_en,
       section: item.section,
@@ -501,7 +503,7 @@ export const getAcademicManagementOptions = async (): Promise<{
       specialiteId: item.specialiteId,
       specialiteNom: item.specialite ? (item.specialite.nom_ar || item.specialite.nom_en) : null,
     })),
-    modules: modules.map((item) => ({
+    modules: modules.map((item: any) => ({
       id: item.id,
       nom: item.nom_ar || item.nom_en || `Module ${item.id}`,
       code: item.code,
@@ -738,14 +740,14 @@ export const getAcademicAssignmentsData = async (): Promise<{
   ]);
 
   return {
-    promos: promos.map((promo) => ({
+    promos: promos.map((promo: any) => ({
       id: promo.id,
       nom: promo.nom_ar || promo.nom_en,
       section: promo.section,
       anneeUniversitaire: promo.anneeUniversitaire,
       specialiteNom: promo.specialite ? (promo.specialite.nom_ar || promo.specialite.nom_en) : null,
     })),
-    modules: modules.map((module) => ({
+    modules: modules.map((module: any) => ({
       id: module.id,
       nom: module.nom_ar || module.nom_en || `Module ${module.id}`,
       code: module.code,
@@ -753,7 +755,7 @@ export const getAcademicAssignmentsData = async (): Promise<{
       specialiteId: module.specialiteId,
       specialiteNom: module.specialite ? (module.specialite.nom_ar || module.specialite.nom_en) : null,
     })),
-    students: students.map((student) => ({
+    students: students.map((student: any) => ({
       id: student.id,
       userId: student.userId,
       nom: student.user.nom,
@@ -764,7 +766,7 @@ export const getAcademicAssignmentsData = async (): Promise<{
         ? `${student.promo.nom_ar || student.promo.nom_en || `Promo ${student.promoId}`} | ${student.promo.section || "-"} | ${student.promo.anneeUniversitaire || "-"}`
         : null,
     })),
-    teachers: teacherUsers.map((teacherUser) => {
+    teachers: teacherUsers.map((teacherUser: any) => {
       const enseignements = teacherUser.enseignant?.enseignements || [];
 
       return {
@@ -774,9 +776,9 @@ export const getAcademicAssignmentsData = async (): Promise<{
         nom: teacherUser.nom,
         prenom: teacherUser.prenom,
         email: teacherUser.email,
-        moduleIds: Array.from(new Set(enseignements.map((item) => item.moduleId).filter((value): value is number => Number.isInteger(value)))),
-        promoIds: Array.from(new Set(enseignements.map((item) => item.promoId).filter((value): value is number => Number.isInteger(value)))),
-        anneeUniversitaire: enseignements.find((item) => !!item.anneeUniversitaire)?.anneeUniversitaire || null,
+        moduleIds: Array.from(new Set(enseignements.map((item: any) => item.moduleId).filter((value: any): value is number => Number.isInteger(value)))),
+        promoIds: Array.from(new Set(enseignements.map((item: any) => item.promoId).filter((value: any): value is number => Number.isInteger(value)))),
+        anneeUniversitaire: enseignements.find((item: any) => !!item.anneeUniversitaire)?.anneeUniversitaire || null,
       };
     }),
   };
@@ -880,7 +882,7 @@ export const assignTeacherModulesByAdmin = async (
     promoId = promo.id;
   }
 
-  const result = await prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx: any) => {
     const enseignant = await tx.enseignant.upsert({
       where: { userId: targetUserId },
       update: {},
