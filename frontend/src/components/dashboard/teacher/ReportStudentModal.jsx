@@ -3,12 +3,14 @@ import { teacherDashboardService } from '../../../services/teacherDashboard';
 
 export default function ReportStudentModal({ student, open, onClose, onSubmitted }) {
   const [reason, setReason] = useState('');
+  const [typeInfraction, setTypeInfraction] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
     if (open) {
       setReason('');
+      setTypeInfraction('moyenne');
       setError('');
       setSubmitting(false);
     }
@@ -26,12 +28,18 @@ export default function ReportStudentModal({ student, open, onClose, onSubmitted
       return;
     }
 
+    if (!typeInfraction.trim()) {
+      setError('Please select an infraction level.');
+      return;
+    }
+
     try {
       setSubmitting(true);
       setError('');
       await teacherDashboardService.reportStudent({
         studentId: student.id,
         reason: trimmed,
+        typeInfraction: typeInfraction.trim(),
       });
       onSubmitted?.();
       onClose?.();
@@ -70,6 +78,26 @@ export default function ReportStudentModal({ student, open, onClose, onSubmitted
                 ? ` (${student.promo.section})`
                 : ''}
             </p>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="md:col-span-2">
+              <label className="block text-xs font-medium text-ink-secondary mb-1">
+                Infraction Level
+              </label>
+              <select
+                value={typeInfraction}
+                onChange={(e) => setTypeInfraction(e.target.value)}
+                className="w-full px-3 py-2 text-sm bg-control-bg border border-control-border rounded-md text-ink focus:ring-2 focus:ring-brand/30 focus:border-brand"
+                required
+              >
+                <option value="">Select infraction level...</option>
+                <option value="faible">Faible</option>
+                <option value="moyenne">Moyenne</option>
+                <option value="grave">Grave</option>
+                <option value="tres_grave">Très grave</option>
+              </select>
+            </div>
           </div>
 
           <div>

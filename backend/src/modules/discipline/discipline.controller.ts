@@ -6,8 +6,8 @@ import { AuthRequest } from "../../middlewares/auth.middleware";
 import prisma from "../../config/database";
 
 const ADMIN_ROLE = "admin";
-const MIN_ADDITIONAL_COUNCIL_MEMBERS = 0;
-const MAX_ADDITIONAL_COUNCIL_MEMBERS = 10;
+const MIN_ADDITIONAL_COUNCIL_MEMBERS = 2;
+const MAX_ADDITIONAL_COUNCIL_MEMBERS = 2;
 
 const normalizeRole = (role: string) => String(role || "").trim().toLowerCase();
 
@@ -212,7 +212,6 @@ export const createDossierHandler = async (req: AuthRequest, res: Response, next
       description,
       reason,
       dateSignal,
-      gravite,
       studentIds,
       titre,
     } = req.body;
@@ -253,6 +252,15 @@ export const createDossierHandler = async (req: AuthRequest, res: Response, next
     let infractionIdToUse = infractionId;
 
     if (!infractionIdToUse && typeInfraction) {
+      const validLevels = ["faible", "moyenne", "grave", "tres_grave"];
+      if (!validLevels.includes(typeInfraction)) {
+        res.status(400).json({
+          success: false,
+          error: { message: "typeInfraction must be one of: faible, moyenne, grave, tres_grave." },
+        });
+        return;
+      }
+
       // Try to find existing infraction by name
       const existingInfraction = await prisma.infraction.findFirst({
         where: {
@@ -263,12 +271,11 @@ export const createDossierHandler = async (req: AuthRequest, res: Response, next
       if (existingInfraction) {
         infractionIdToUse = existingInfraction.id;
       } else {
-        // Create new infraction
         const newInfraction = await prisma.infraction.create({
           data: {
             nom_ar: typeInfraction,
             nom_en: typeInfraction,
-            gravite: (gravite as any) || "moyenne",
+            gravite: typeInfraction as any,
           },
         });
         infractionIdToUse = newInfraction.id;
@@ -284,6 +291,13 @@ export const createDossierHandler = async (req: AuthRequest, res: Response, next
     }
 
     const descriptionToUse = descriptionSignal || description || reason || titre || "";
+    if (!descriptionToUse.trim()) {
+      res.status(400).json({
+        success: false,
+        error: { message: "Une raison (description) est obligatoire pour signaler un dossier." },
+      });
+      return;
+    }
 
     // Create dossiers for each student
     const dossiers = await Promise.all(
@@ -356,10 +370,45 @@ export const updateDossierHandler = async (req: Request, res: Response, next: Ne
  * DELETE /api/v1/cd/cases/:id
  * Delete a disciplinary dossier
  */
-export const deleteDossierHandler = async (req: Request, res: Response, next: NextFunction) => {
+export const deleteDossierHandler = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
+    const dossierId = Number(req.params.id);
+    const dossier = await prisma.dossierDisciplinaire.findUnique({
+      where: { id: dossierId },
+      select: { id: true, enseignantSignalant: true, status: true },
+    });
+
+    if (!dossier) {
+      res.status(404).json({ success: false, error: { message: "Dossier introuvable." } });
+      return;
+    }
+
+    const isAdmin = Array.isArray(req.user?.roles) && req.user.roles.includes('admin');
+    const callerEnseignant = await prisma.enseignant.findUnique({
+      where: { userId: req.user?.id ?? -1 },
+      select: { id: true },
+    });
+    const callerEnseignantId = callerEnseignant?.id ?? null;
+
+    // Allow admin or the reporting teacher to delete, but only if status is 'signale'
+    if (!isAdmin && callerEnseignantId !== dossier.enseignantSignalant) {
+      res.status(403).json({
+        success: false,
+        error: { message: "Accès refusé à ce dossier." },
+      });
+      return;
+    }
+
+    if (dossier.status !== 'signale') {
+      res.status(409).json({
+        success: false,
+        error: { message: "Seuls les dossiers en état 'signale' peuvent être supprimés." },
+      });
+      return;
+    }
+
     await prisma.dossierDisciplinaire.delete({
-      where: { id: Number(req.params.id) },
+      where: { id: dossierId },
     });
     res.json({ success: true, message: "Dossier supprimé." });
   } catch (error) {
@@ -512,13 +561,12 @@ export const createConseilHandler = async (req: AuthRequest, res: Response, next
       : [];
 
     if (
-      additionalMemberIds.length < MIN_ADDITIONAL_COUNCIL_MEMBERS
-      || additionalMemberIds.length > MAX_ADDITIONAL_COUNCIL_MEMBERS
+      additionalMemberIds.length !== MAX_ADDITIONAL_COUNCIL_MEMBERS
     ) {
       res.status(400).json({
         success: false,
         error: {
-          message: `Le conseil doit contenir entre ${MIN_ADDITIONAL_COUNCIL_MEMBERS} et ${MAX_ADDITIONAL_COUNCIL_MEMBERS} membres supplémentaires.`,
+          message: `Le conseil doit contenir exactement ${MAX_ADDITIONAL_COUNCIL_MEMBERS} membres supplémentaires.`,
         },
       });
       return;

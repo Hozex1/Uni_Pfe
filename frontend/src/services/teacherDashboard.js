@@ -36,15 +36,14 @@ export const teacherDashboardService = {
 
   // Open a disciplinary case for a student. Reuses the existing endpoint
   // already used by the legacy DisciplinaryCasesPage teacher form.
-  reportStudent: ({ studentId, reason }) =>
+  reportStudent: ({ studentId, reason, typeInfraction }) =>
     request('/api/v1/disciplinary/cases', {
       method: 'POST',
       body: JSON.stringify({
         studentId,
         reason,
         titre: 'Teacher disciplinary report',
-        typeInfraction: 'Misconduct',
-        gravite: 'majeure',
+        typeInfraction,
       }),
     }),
 };

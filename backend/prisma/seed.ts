@@ -1,5 +1,6 @@
 /// <reference types="node" />
 
+import "dotenv/config";
 import { CategorieDocument, PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 
@@ -270,6 +271,38 @@ async function main() {
     email: "teacher2@univ-tiaret.dz",
     nom: "Mebarki",
     prenom: "Nadia",
+    roleNames: ["enseignant"],
+    enseignantData: { gradeId: gradeMAA.id },
+  });
+
+  await createUser({
+    email: "teacher3@univ-tiaret.dz",
+    nom: "Khelifa",
+    prenom: "Ahmed",
+    roleNames: ["enseignant"],
+    enseignantData: { gradeId: gradeMCA.id },
+  });
+
+  await createUser({
+    email: "teacher4@univ-tiaret.dz",
+    nom: "Bouzid",
+    prenom: "Fatima",
+    roleNames: ["enseignant"],
+    enseignantData: { gradeId: gradeMAA.id },
+  });
+
+  await createUser({
+    email: "teacher5@univ-tiaret.dz",
+    nom: "Taleb",
+    prenom: "Mohamed",
+    roleNames: ["enseignant"],
+    enseignantData: { gradeId: gradeMCA.id },
+  });
+
+  await createUser({
+    email: "teacher6@univ-tiaret.dz",
+    nom: "Ziani",
+    prenom: "Leila",
     roleNames: ["enseignant"],
     enseignantData: { gradeId: gradeMAA.id },
   });

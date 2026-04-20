@@ -63,8 +63,8 @@ router.post("/dossiers-disciplinaires", requireAuth, requireRole(reportRoles), c
 router.post("/cases", requireAuth, requireRole(reportRoles), createDossierHandler);
 router.patch("/dossiers-disciplinaires/:id", requireAuth, requireRole(adminOnly), updateDossierHandler);
 router.patch("/cases/:id", requireAuth, requireRole(adminOnly), updateDossierHandler);
-router.delete("/dossiers-disciplinaires/:id", requireAuth, requireRole(adminOnly), deleteDossierHandler);
-router.delete("/cases/:id", requireAuth, requireRole(adminOnly), deleteDossierHandler);
+router.delete("/dossiers-disciplinaires/:id", requireAuth, requireRole(reportRoles), deleteDossierHandler);
+router.delete("/cases/:id", requireAuth, requireRole(reportRoles), deleteDossierHandler);
 
 router.get("/infractions", requireAuth, requireRole(readRoles), listInfractionsHandler);
 router.get("/infractions/:id", requireAuth, requireRole(readRoles), getInfractionHandler);

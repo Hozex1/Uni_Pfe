@@ -81,10 +81,11 @@ function Section({ title, icon, children, action }) {
 
 /* ── Component ──────────────────────────────────────────────── */
 
-export default function CaseDetailPage({ caseData, onBack, canManageActions = true, onCreateMeeting = null }) {
+export default function CaseDetailPage({ caseData, onBack, canManageActions = true, onCreateMeeting = null, canDeleteCase = false, onDeleteCase = null }) {
   const navigate = useNavigate();
   const [showSanctionModal, setShowSanctionModal] = useState(false);
   const [showSummonsModal, setShowSummonsModal] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const safeCaseData = {
     ...caseData,
     timeline: Array.isArray(caseData?.timeline) ? caseData.timeline : [],
@@ -124,8 +125,8 @@ export default function CaseDetailPage({ caseData, onBack, canManageActions = tr
           </div>
 
           {/* Actions */}
-          {canManageActions && typeof onCreateMeeting === 'function' && safeCaseData.status === 'pending' && (
-            <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2">
+            {canManageActions && typeof onCreateMeeting === 'function' && safeCaseData.status === 'pending' && (
               <button
                 onClick={() => onCreateMeeting(safeCaseData.id)}
                 className="px-4 py-2 text-sm font-medium text-white bg-brand rounded-md hover:bg-brand-hover active:bg-brand-dark transition-all duration-150 flex items-center gap-2"
@@ -135,8 +136,27 @@ export default function CaseDetailPage({ caseData, onBack, canManageActions = tr
                 </svg>
                 New Meeting
               </button>
-            </div>
-          )}
+            )}
+            {canDeleteCase && typeof onDeleteCase === 'function' && safeCaseData.status === 'pending' && (
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!window.confirm('Delete this case? This action cannot be undone.')) return;
+                  setDeleting(true);
+                  try {
+                    await onDeleteCase(safeCaseData.id);
+                    onBack();
+                  } finally {
+                    setDeleting(false);
+                  }
+                }}
+                disabled={deleting}
+                className="px-4 py-2 text-sm font-medium text-white bg-danger rounded-md hover:bg-danger-hover active:bg-danger-dark transition-all duration-150"
+              >
+                {deleting ? 'Deleting…' : 'Delete Case'}
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -151,9 +171,12 @@ export default function CaseDetailPage({ caseData, onBack, canManageActions = tr
             title="Case Summary"
             icon={<svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" /></svg>}
           >
-            <div className="p-6">
-              <p className="text-sm text-ink-secondary leading-relaxed">{safeCaseData.description}</p>
-              <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div className="p-6 space-y-5">
+              <div>
+                <p className="text-xs text-ink-muted">Report Reason</p>
+                <p className="text-sm text-ink-secondary leading-relaxed">{safeCaseData.descriptionSignal_ar || safeCaseData.descriptionSignal_en || safeCaseData.description || 'No reason provided'}</p>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <div>
                   <p className="text-xs text-ink-muted">Student</p>
                   <p className="text-sm font-medium text-ink mt-0.5">{safeCaseData.studentName}</p>

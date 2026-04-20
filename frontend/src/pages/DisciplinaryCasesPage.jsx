@@ -196,7 +196,7 @@ const MEETING_STATUS_CONFIG = {
 };
 
 const VIOLATION_TYPES = ['All', 'Plagiarism', 'Exam Fraud', 'Misconduct'];
-const MAX_ADDITIONAL_MEMBER_COUNT = 10;
+const MAX_ADDITIONAL_MEMBER_COUNT = 2;
 
 /* ── Helpers ────────────────────────────────────────────────── */
 
@@ -696,7 +696,7 @@ function normalizeCase(rawCase) {
     ? caseId
     : `CASE-${caseId}`;
   const dateSignal = rawCase.dateSignal || rawCase.dateReported || rawCase.createdAt || new Date().toISOString();
-  const description = rawCase.descriptionSignal || rawCase.description || '';
+  const description = rawCase.descriptionSignal_ar || rawCase.descriptionSignal_en || rawCase.descriptionSignal || rawCase.description || '';
   const infractionName = rawCase.infraction?.nom || rawCase.violationType || 'Misconduct';
   const reporterName = rawCase.reporterName
     || [rawCase.enseignantSignalantR?.user?.prenom, rawCase.enseignantSignalantR?.user?.nom].filter(Boolean).join(' ').trim()
@@ -880,7 +880,23 @@ function TeacherQuickReport({
           </select>
         </div>
 
-        <div className="md:col-span-3">
+        <div className="md:col-span-1">
+          <label className="block text-xs font-medium text-ink-secondary mb-1">Infraction Level</label>
+          <select
+            value={form.typeInfraction}
+            onChange={(e) => onChange('typeInfraction', e.target.value)}
+            className="w-full px-3 py-2 text-sm bg-control-bg border border-control-border rounded-md text-ink focus:ring-2 focus:ring-brand/30 focus:border-brand"
+            required
+          >
+            <option value="">Select infraction level...</option>
+            <option value="faible">Faible</option>
+            <option value="moyenne">Moyenne</option>
+            <option value="grave">Grave</option>
+            <option value="tres_grave">Très grave</option>
+          </select>
+        </div>
+
+        <div className="md:col-span-1">
           <label className="block text-xs font-medium text-ink-secondary mb-1">Reason</label>
           <textarea
             value={form.reason}
@@ -921,6 +937,7 @@ const ADMIN_TABS = [
 
 const TEACHER_TABS = [
   { id: 'cases', label: 'My Reports', Icon: icons.folder },
+  { id: 'meetings', label: 'My Meetings', Icon: icons.calendar },
 ];
 
 const PRESIDENT_TABS = [
@@ -937,7 +954,7 @@ export default function DisciplinaryCasesPage({ role = 'teacher' }) {
   const isAdminView = normalizedRole === 'admin';
   const isPresidentView = normalizedRole === 'president';
   const canTeacherReport = normalizedRole === 'teacher';
-  const canViewMeetings = isAdminView || isPresidentView;
+  const canViewMeetings = isAdminView || isPresidentView || canTeacherReport;
   const canManageMeetings = isAdminView;
   const availableTabs = isAdminView
     ? ADMIN_TABS
@@ -970,7 +987,7 @@ export default function DisciplinaryCasesPage({ role = 'teacher' }) {
   const [reportSubmitting, setReportSubmitting] = useState(false);
   const [reportError, setReportError] = useState('');
   const [reportSuccess, setReportSuccess] = useState('');
-  const [reportForm, setReportForm] = useState({ studentId: '', reason: '' });
+  const [reportForm, setReportForm] = useState({ studentId: '', reason: '', typeInfraction: '' });
 
   const loadCases = async () => {
     if (isPresidentView) {
@@ -1101,9 +1118,10 @@ export default function DisciplinaryCasesPage({ role = 'teacher' }) {
 
     const studentId = Number(reportForm.studentId);
     const reason = reportForm.reason.trim();
+    const typeInfraction = reportForm.typeInfraction.trim();
 
-    if (!studentId || !reason) {
-      setReportError('Please select a student and enter the reason.');
+    if (!studentId || !reason || !typeInfraction) {
+      setReportError('Please fill in all required fields.');
       return;
     }
 
@@ -1115,13 +1133,12 @@ export default function DisciplinaryCasesPage({ role = 'teacher' }) {
           studentId,
           reason,
           titre: 'Teacher disciplinary report',
-          typeInfraction: 'Misconduct',
-          gravite: 'majeure',
+          typeInfraction,
         }),
       });
 
       await loadCases();
-      setReportForm({ studentId: '', reason: '' });
+      setReportForm({ studentId: '', reason: '', typeInfraction: '' });
       setReportSuccess('Case created successfully.');
       setActiveTab('cases');
     } catch (error) {
@@ -1162,6 +1179,10 @@ export default function DisciplinaryCasesPage({ role = 'teacher' }) {
 
   const filteredMeetings = meetings
     .filter(m => {
+      // For teachers, only show meetings where they are president
+      // Temporarily disabled for debugging
+      // if (canTeacherReport && !isAdminView && m.presidentEnseignantId !== user?.enseignant?.id) return false;
+      
       if (meetingFilterStatus !== 'all' && m.status !== meetingFilterStatus) return false;
       if (meetingSearch) {
         const q = meetingSearch.toLowerCase();
@@ -1181,12 +1202,28 @@ export default function DisciplinaryCasesPage({ role = 'teacher' }) {
     setActiveTab('new-meeting');
   };
 
+  const handleDeleteCase = async (caseId) => {
+    if (!window.confirm('Are you sure you want to delete this case? This action cannot be undone.')) return;
+
+    try {
+      const numericId = Number(String(caseId).replace('CASE-', ''));
+      await request(`/api/v1/disciplinary/cases/${numericId}`, {
+        method: 'DELETE',
+      });
+      await loadCases();
+    } catch (error) {
+      window.alert(error?.message || 'Failed to delete case.');
+    }
+  };
+
   /* Detail views */
   if (selectedCase) {
     return (
       <CaseDetailPage
         caseData={selectedCase}
         canManageActions={canManageMeetings}
+        canDeleteCase={isAdminView || canTeacherReport}
+        onDeleteCase={handleDeleteCase}
         onCreateMeeting={(caseId) => {
           setSelectedCase(null);
           goToNewMeeting([caseId]);
@@ -1328,6 +1365,9 @@ export default function DisciplinaryCasesPage({ role = 'teacher' }) {
           canScheduleMeetings={canManageMeetings}
           onSelectCase={setSelectedCase}
           onConvoke={goToNewMeeting}
+          onDeleteCase={handleDeleteCase}
+          canDeleteCases={isAdminView || canTeacherReport}
+          user={user}
         />
       )}
 
@@ -1599,7 +1639,9 @@ function CasesTab({
   filterType, setFilterType,
   searchQuery, setSearchQuery,
   canScheduleMeetings = false,
-  onSelectCase, onConvoke,
+  onSelectCase, onConvoke, onDeleteCase,
+  canDeleteCases = false,
+  user,
 }) {
   return (
     <div className="bg-surface rounded-lg border border-edge shadow-card">
@@ -1696,6 +1738,9 @@ function CasesTab({
                     <td className="px-6 py-3.5">
                       <p className="font-medium text-ink">{c.studentName}</p>
                       <p className="text-xs text-ink-muted mt-0.5">{c.studentId} · {c.department}</p>
+                      {c.description && (
+                        <p className="text-xs text-ink-tertiary mt-1 line-clamp-2">{c.description}</p>
+                      )}
                     </td>
                     <td className="px-6 py-3.5 hidden md:table-cell">
                       <span className="text-ink-secondary">{c.violationType}</span>
@@ -1720,6 +1765,15 @@ function CasesTab({
                             title="Schedule meeting"
                           >
                             {icons.scale({ className: 'w-3.5 h-3.5' })}
+                          </button>
+                        )}
+                        {canDeleteCases && c.status === 'pending' && (
+                          <button
+                            onClick={e => { e.stopPropagation(); onDeleteCase(c.id); }}
+                            className="px-2.5 py-1 text-xs font-medium text-danger bg-danger/5 border border-danger/30 rounded-md hover:bg-danger/10 transition-colors duration-100 focus:ring-2 focus:ring-danger/30"
+                            title="Delete case"
+                          >
+                            {icons.x({ className: 'w-3.5 h-3.5' })}
                           </button>
                         )}
                         <button
@@ -2028,8 +2082,8 @@ function NewMeetingTab({ cases, staff = STAFF_MEMBERS_DEFAULT, preselected = [],
       return;
     }
 
-    if (form.memberIds.length > MAX_ADDITIONAL_MEMBER_COUNT) {
-      setSaveError(`You can select up to ${MAX_ADDITIONAL_MEMBER_COUNT} additional members.`);
+    if (form.memberIds.length !== MAX_ADDITIONAL_MEMBER_COUNT) {
+      setSaveError(`You must select exactly ${MAX_ADDITIONAL_MEMBER_COUNT} additional members.`);
       return;
     }
 
@@ -2055,8 +2109,8 @@ function NewMeetingTab({ cases, staff = STAFF_MEMBERS_DEFAULT, preselected = [],
         throw new Error('Selected president is invalid. Please choose again.');
       }
 
-      if (selectedMemberRows.length > MAX_ADDITIONAL_MEMBER_COUNT) {
-        throw new Error(`You can select up to ${MAX_ADDITIONAL_MEMBER_COUNT} valid members.`);
+      if (selectedMemberRows.length !== MAX_ADDITIONAL_MEMBER_COUNT) {
+        throw new Error(`You must select exactly ${MAX_ADDITIONAL_MEMBER_COUNT} additional members.`);
       }
 
       if (primaryReporter.id && Number(primaryReporter.id) === Number(form.presidentId)) {
@@ -2073,26 +2127,7 @@ function NewMeetingTab({ cases, staff = STAFF_MEMBERS_DEFAULT, preselected = [],
         return;
       }
 
-      // Generate and download PDF
-      await downloadMeetingFormPdf({
-        title: form.title,
-        meetingDate: form.date,
-        meetingTime: form.time,
-        meetingLocation: form.location,
-        agenda: form.agenda,
-        studentRows: selectedCases.map((item) => ({
-          caseId: item.id,
-          studentName: item.studentName,
-          studentId: item.studentId,
-          violationType: item.violationType,
-          caseDate: item.dateReported || item.dateOfIncident,
-        })),
-        memberRows: [
-          { name: presidentStaff.name, role: 'Président' },
-          { name: primaryReporter.name, role: 'Rapporteur (auto)' },
-          ...selectedMemberRows.map((member) => ({ name: member.name, role: 'Membre' })),
-        ],
-      });
+      // Save meeting to database (no PDF generation for admins)
 
       // Save meeting to database
       const meetingPayload = {
@@ -2292,7 +2327,7 @@ function NewMeetingTab({ cases, staff = STAFF_MEMBERS_DEFAULT, preselected = [],
           {/* Members */}
           <div className="mb-4">
             <label className="block text-xs font-semibold text-ink-muted uppercase tracking-wider mb-2">
-              Members <span className="normal-case font-normal text-ink-muted">(dynamic list, up to {MAX_ADDITIONAL_MEMBER_COUNT} — the reporter is added as rapporteur automatically)</span>
+              Members <span className="normal-case font-normal text-ink-muted">(exactly {MAX_ADDITIONAL_MEMBER_COUNT} required — the reporter is added as rapporteur automatically)</span>
             </label>
             {availableMemberChoicesCount <= 2 && (
               <p className="mb-2 text-xs text-ink-muted">
@@ -2349,7 +2384,7 @@ function NewMeetingTab({ cases, staff = STAFF_MEMBERS_DEFAULT, preselected = [],
               || !form.location.trim()
               || selectedCases.length === 0
               || !form.presidentId
-              || form.memberIds.length > MAX_ADDITIONAL_MEMBER_COUNT
+              || form.memberIds.length !== MAX_ADDITIONAL_MEMBER_COUNT
               || selectedReporters.length !== 1
               || saving
             }
@@ -2614,12 +2649,10 @@ function MeetingDetailView({
 
   const DECISION_OPTIONS = [
     { value: '', label: 'Choose a decision...' },
-    { value: 'Oral Warning', label: 'Oral Warning' },
-    { value: 'Written Warning', label: 'Written Warning' },
-    { value: 'Reprimand', label: 'Reprimand' },
-    { value: 'Temporary Exclusion', label: 'Temporary Exclusion' },
-    { value: 'Permanent Exclusion', label: 'Permanent Exclusion' },
-    { value: 'Dismissed', label: 'Dismissed (No Action)' },
+    { value: 'avertissement', label: 'Avertissement' },
+    { value: 'blame', label: 'Blame' },
+    { value: 'suspension', label: 'Suspension' },
+    { value: 'exclusion', label: 'Exclusion' },
   ];
 
   const handleUpdateMeeting = async () => {
@@ -2906,7 +2939,7 @@ function MeetingDetailView({
 
           <div className="mb-4 bg-surface-200/40 border border-edge-subtle rounded-md p-4">
             <label className="block text-xs font-semibold text-ink-muted uppercase tracking-wider mb-2">
-              {`Additional Members (up to ${MAX_ADDITIONAL_MEMBER_COUNT})`}
+              {`Additional Members (exactly ${MAX_ADDITIONAL_MEMBER_COUNT})`}
             </label>
             {availableEditMemberChoicesCount <= 2 && (
               <p className="mb-2 text-xs text-ink-muted">
