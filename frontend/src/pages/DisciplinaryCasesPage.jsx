@@ -853,31 +853,82 @@ function TeacherQuickReport({
   error,
   success,
 }) {
+  const [searchInput, setSearchInput] = useState('');
+  const [showDropdown, setShowDropdown] = useState(false);
+
+  const filteredStudents = students.filter(s => {
+    const query = searchInput.toLowerCase().trim();
+    if (!query) return false;
+    return (
+      s.fullName.toLowerCase().includes(query) ||
+      (s.matricule && s.matricule.toLowerCase().includes(query))
+    );
+  });
+
+  const selectedStudent = students.find(s => String(s.id) === form.studentId);
+
+  const handleSelectStudent = (studentId, studentName) => {
+    onChange('studentId', String(studentId));
+    setSearchInput(studentName);
+    setShowDropdown(false);
+  };
+
   return (
     <div className="bg-surface rounded-lg border border-edge shadow-card p-6">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <h2 className="text-base font-semibold text-ink">Teacher Report</h2>
-          <p className="text-sm text-ink-tertiary mt-1">Select one student and write the reason to open a disciplinary case.</p>
+          <p className="text-sm text-ink-tertiary mt-1">Search for a student and write the reason to open a disciplinary case.</p>
         </div>
       </div>
 
       <form onSubmit={onSubmit} className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3">
-        <div className="md:col-span-1">
+        <div className="md:col-span-1 relative">
           <label className="block text-xs font-medium text-ink-secondary mb-1">Student</label>
-          <select
-            value={form.studentId}
-            onChange={(e) => onChange('studentId', e.target.value)}
-            className="w-full px-3 py-2 text-sm bg-control-bg border border-control-border rounded-md text-ink focus:ring-2 focus:ring-brand/30 focus:border-brand"
-            required
-          >
-            <option value="">Select student...</option>
-            {students.map((s) => (
-              <option key={s.id} value={String(s.id)}>
-                {s.fullName} {s.matricule ? `(${s.matricule})` : ''}
-              </option>
-            ))}
-          </select>
+          <input
+            type="text"
+            value={searchInput}
+            onChange={(e) => {
+              setSearchInput(e.target.value);
+              setShowDropdown(true);
+            }}
+            onFocus={() => setShowDropdown(true)}
+            onBlur={() => setTimeout(() => setShowDropdown(false), 150)}
+            placeholder="Search by name or ID..."
+            className="w-full px-3 py-2 text-sm bg-control-bg border border-control-border rounded-md text-ink placeholder:text-ink-muted focus:ring-2 focus:ring-brand/30 focus:border-brand"
+          />
+          {showDropdown && (
+            <div className="absolute top-full left-0 right-0 mt-1 bg-surface border border-control-border rounded-md shadow-lg z-10 max-h-48 overflow-y-auto">
+              {filteredStudents.length > 0 ? (
+                filteredStudents.map(s => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => handleSelectStudent(s.id, s.fullName)}
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-surface-200 transition-colors border-b border-edge-subtle last:border-b-0"
+                  >
+                    <p className="font-medium text-ink">{s.fullName}</p>
+                    <p className="text-xs text-ink-tertiary">
+                      {s.matricule && `ID: ${s.matricule}`}
+                      {s.matricule && s.promo?.nom ? ' · ' : ''}
+                      {s.promo?.nom || ''}
+                    </p>
+                  </button>
+                ))
+              ) : searchInput.trim() ? (
+                <div className="px-3 py-3 text-sm text-ink-muted text-center">
+                  No students found
+                </div>
+              ) : (
+                <div className="px-3 py-3 text-sm text-ink-muted text-center">
+                  Start typing to search...
+                </div>
+              )}
+            </div>
+          )}
+          {form.studentId && !searchInput && (
+            <p className="text-xs text-success mt-1">✓ {selectedStudent?.fullName} selected</p>
+          )}
         </div>
 
         <div className="md:col-span-1">
@@ -916,7 +967,7 @@ function TeacherQuickReport({
           </div>
           <button
             type="submit"
-            disabled={submitting}
+            disabled={submitting || !form.studentId}
             className="px-4 py-2 text-sm font-medium text-white bg-brand rounded-md hover:bg-brand-hover active:bg-brand-dark transition-all duration-150 disabled:opacity-60 disabled:cursor-not-allowed"
           >
             {submitting ? 'Submitting...' : 'Create Case'}
