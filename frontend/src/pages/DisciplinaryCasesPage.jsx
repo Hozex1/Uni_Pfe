@@ -1180,8 +1180,7 @@ export default function DisciplinaryCasesPage({ role = 'teacher' }) {
   const filteredMeetings = meetings
     .filter(m => {
       // For teachers, only show meetings where they are president
-      // Temporarily disabled for debugging
-      // if (canTeacherReport && !isAdminView && m.presidentEnseignantId !== user?.enseignant?.id) return false;
+      if (canTeacherReport && !isAdminView && m.presidentEnseignantId !== user?.enseignant?.id) return false;
       
       if (meetingFilterStatus !== 'all' && m.status !== meetingFilterStatus) return false;
       if (meetingSearch) {
