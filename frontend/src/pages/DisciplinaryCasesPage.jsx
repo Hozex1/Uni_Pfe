@@ -697,7 +697,13 @@ function normalizeCase(rawCase) {
     : `CASE-${caseId}`;
   const dateSignal = rawCase.dateSignal || rawCase.dateReported || rawCase.createdAt || new Date().toISOString();
   const description = rawCase.descriptionSignal_ar || rawCase.descriptionSignal_en || rawCase.descriptionSignal || rawCase.description || '';
-  const infractionName = rawCase.infraction?.nom || rawCase.violationType || 'Misconduct';
+  const infractionLabel = rawCase.infraction?.nom_en || rawCase.infraction?.nom_ar || rawCase.violationType || 'Misconduct';
+  const graviteLabel = rawCase.infraction?.gravite
+    ? rawCase.infraction.gravite === 'tres_grave'
+      ? 'Très grave'
+      : rawCase.infraction.gravite.charAt(0).toUpperCase() + rawCase.infraction.gravite.slice(1)
+    : '';
+  const infractionName = graviteLabel ? `${infractionLabel} (${graviteLabel})` : infractionLabel;
   const reporterName = rawCase.reporterName
     || [rawCase.enseignantSignalantR?.user?.prenom, rawCase.enseignantSignalantR?.user?.nom].filter(Boolean).join(' ').trim()
     || null;
@@ -732,8 +738,8 @@ function normalizeCase(rawCase) {
     evidenceFiles: Array.isArray(rawCase.evidenceFiles) ? rawCase.evidenceFiles : [],
     decision: rawCase.decision
       ? {
-          verdict: rawCase.decision.nom,
-          details: rawCase.remarqueDecision || rawCase.decision.description || '',
+          verdict: rawCase.decision.verdict || rawCase.decision.nom_en || rawCase.decision.nom_ar || rawCase.decision.nom || '',
+          details: rawCase.remarqueDecision || rawCase.decision.details || rawCase.decision.description || '',
           date: rawCase.dateDecision || rawCase.updatedAt || rawCase.createdAt || new Date().toISOString(),
           issuedBy: 'Disciplinary council',
         }
@@ -780,9 +786,22 @@ function normalizeMeeting(rawMeeting) {
       ? rawMeeting.dossiers.map((d) => `CASE-${d.id}`)
       : [];
 
+  // Extract decision from the first dossier that has one (all should have same decision in a meeting)
+  const decisionsInMeeting = Array.isArray(rawMeeting.dossiers)
+    ? rawMeeting.dossiers
+        .map((d) => d.decision)
+        .filter(Boolean)
+    : [];
+  
+  const firstDecision = decisionsInMeeting[0];
+  const decisionText = firstDecision 
+    ? (firstDecision.verdict || firstDecision.nom_en || firstDecision.nom_ar || '')
+    : null;
+
   const presidentMember = memberEntries.find((m) => m.role === 'president') || null;
   const reporterMember = memberEntries.find((m) => m.role === 'rapporteur') || null;
   const presidentEnseignantId = presidentMember?.enseignantId ?? null;
+  const membreIds = memberEntries.map(m => String(m.enseignantId)).filter(Boolean);
 
   return {
     ...rawMeeting,
@@ -796,8 +815,13 @@ function normalizeMeeting(rawMeeting) {
     status: rawMeeting.status === 'planifie' ? 'scheduled' : rawMeeting.status === 'termine' ? 'finalized' : (rawMeeting.status || 'scheduled'),
     participants,
     memberEntries,
+    membres: memberEntries,
+    membreIds,
     caseIds,
+    decision: decisionText,
+    dossiers: Array.isArray(rawMeeting.dossiers) ? rawMeeting.dossiers : [],
     presidentEnseignantId,
+    rapporteurEnseignantId: reporterMember?.enseignantId ?? null,
     reporterEnseignantId: reporterMember?.enseignantId ?? null,
   };
 }
@@ -846,6 +870,7 @@ function Avatar({ name, size = 'w-8 h-8 text-xs' }) {
 
 function TeacherQuickReport({
   students,
+  infractions,
   form,
   onChange,
   onSubmit,
@@ -940,15 +965,28 @@ function TeacherQuickReport({
             required
           >
             <option value="">Select infraction level...</option>
-            <option value="faible">Faible</option>
-            <option value="moyenne">Moyenne</option>
-            <option value="grave">Grave</option>
-            <option value="tres_grave">Très grave</option>
+            {infractions.length > 0 ? (
+              infractions.map((infraction) => {
+                const label = `${infraction.nom_en || infraction.nom_ar} (${infraction.gravite === 'tres_grave' ? 'Très grave' : infraction.gravite})`;
+                return (
+                  <option key={infraction.id} value={infraction.id}>
+                    {label}
+                  </option>
+                );
+              })
+            ) : (
+              <> 
+                <option value="faible">Faible</option>
+                <option value="moyenne">Moyenne</option>
+                <option value="grave">Grave</option>
+                <option value="tres_grave">Très grave</option>
+              </>
+            )}
           </select>
         </div>
 
         <div className="md:col-span-1">
-          <label className="block text-xs font-medium text-ink-secondary mb-1">Reason</label>
+          <label className="block text-xs font-medium text-ink-secondary mb-1">Details</label>
           <textarea
             value={form.reason}
             onChange={(e) => onChange('reason', e.target.value)}
@@ -956,7 +994,6 @@ function TeacherQuickReport({
             maxLength={2000}
             className="w-full px-3 py-2 text-sm bg-control-bg border border-control-border rounded-md text-ink placeholder:text-ink-muted focus:ring-2 focus:ring-brand/30 focus:border-brand"
             placeholder="Describe what happened..."
-            required
           />
         </div>
 
@@ -993,6 +1030,7 @@ const TEACHER_TABS = [
 
 const PRESIDENT_TABS = [
   { id: 'meetings', label: 'Decision Meetings', Icon: icons.calendar },
+  { id: 'my-meetings', label: 'My Meetings', Icon: icons.calendar },
 ];
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1034,6 +1072,8 @@ export default function DisciplinaryCasesPage({ role = 'teacher' }) {
   const [meetings, setMeetings] = useState([]);
   const [students, setStudents] = useState([]);
   const [staff, setStaff] = useState([]);
+  const [infractions, setInfractions] = useState([]);
+  const [disciplinaryDecisions, setDisciplinaryDecisions] = useState([]);
   const [dataLoading, setDataLoading] = useState(true);
   const [reportSubmitting, setReportSubmitting] = useState(false);
   const [reportError, setReportError] = useState('');
@@ -1078,11 +1118,13 @@ export default function DisciplinaryCasesPage({ role = 'teacher' }) {
     (async () => {
       try {
         if (isAdminView) {
-          const [cRes, mRes, sRes, stRes] = await Promise.allSettled([
+          const [cRes, mRes, sRes, stRes, iRes, dRes] = await Promise.allSettled([
             request('/api/v1/disciplinary/cases'),
             request('/api/v1/disciplinary/meetings'),
             request('/api/v1/disciplinary/students'),
             request('/api/v1/disciplinary/staff'),
+            request('/api/v1/disciplinary/infractions'),
+            request('/api/v1/disciplinary/decisions'),
           ]);
 
           if (cRes.status === 'fulfilled') {
@@ -1105,26 +1147,61 @@ export default function DisciplinaryCasesPage({ role = 'teacher' }) {
           } else {
             setStaff([]);
           }
+
+          if (iRes.status === 'fulfilled') {
+            setInfractions(Array.isArray(iRes.value?.data) ? iRes.value.data : []);
+          } else {
+            setInfractions([]);
+          }
+
+          if (dRes.status === 'fulfilled') {
+            setDisciplinaryDecisions(Array.isArray(dRes.value?.data) ? dRes.value.data : []);
+          } else {
+            setDisciplinaryDecisions([]);
+          }
         } else if (isPresidentView) {
-          const meetingsResponse = await request('/api/v1/disciplinary/meetings');
-          const rawMeetings = Array.isArray(meetingsResponse?.data) ? meetingsResponse.data : [];
-          setMeetings(rawMeetings.map(normalizeMeeting).filter(Boolean));
+          const [mRes, iRes, dRes] = await Promise.allSettled([
+            request('/api/v1/disciplinary/meetings'),
+            request('/api/v1/disciplinary/infractions'),
+            request('/api/v1/disciplinary/decisions'),
+          ]);
 
-          const rawCasesFromMeetings = rawMeetings.flatMap((meeting) =>
-            Array.isArray(meeting?.dossiers) ? meeting.dossiers : []
-          );
+          if (mRes.status === 'fulfilled') {
+            const rawMeetings = Array.isArray(mRes.value?.data) ? mRes.value.data : [];
+            setMeetings(rawMeetings.map(normalizeMeeting).filter(Boolean));
 
-          const dedupedCases = Array.from(
-            new Map(rawCasesFromMeetings.map((item) => [item.id, item])).values()
-          );
+            const rawCasesFromMeetings = rawMeetings.flatMap((meeting) =>
+              Array.isArray(meeting?.dossiers) ? meeting.dossiers : []
+            );
 
-          setCases(dedupedCases.map(normalizeCase).filter(Boolean));
+            const dedupedCases = Array.from(
+              new Map(rawCasesFromMeetings.map((item) => [item.id, item])).values()
+            );
+
+            setCases(dedupedCases.map(normalizeCase).filter(Boolean));
+          }
+
+          if (iRes.status === 'fulfilled') {
+            setInfractions(Array.isArray(iRes.value?.data) ? iRes.value.data : []);
+          } else {
+            setInfractions([]);
+          }
+
+          if (dRes.status === 'fulfilled') {
+            setDisciplinaryDecisions(Array.isArray(dRes.value?.data) ? dRes.value.data : []);
+          } else {
+            setDisciplinaryDecisions([]);
+          }
+
           setStudents([]);
           setStaff([]);
         } else {
-          const [cRes, sRes] = await Promise.allSettled([
+          const [cRes, sRes, mRes, iRes, dRes] = await Promise.allSettled([
             request('/api/v1/disciplinary/cases'),
             request('/api/v1/disciplinary/students'),
+            request('/api/v1/disciplinary/meetings'),
+            request('/api/v1/disciplinary/infractions'),
+            request('/api/v1/disciplinary/decisions'),
           ]);
 
           if (cRes.status === 'fulfilled') {
@@ -1136,7 +1213,25 @@ export default function DisciplinaryCasesPage({ role = 'teacher' }) {
             setStudents(Array.isArray(sRes.value?.data) ? sRes.value.data : []);
           }
 
-          setMeetings([]);
+          if (mRes.status === 'fulfilled') {
+            const rawMeetings = Array.isArray(mRes.value?.data) ? mRes.value.data : [];
+            setMeetings(rawMeetings.map(normalizeMeeting).filter(Boolean));
+          } else {
+            setMeetings([]);
+          }
+
+          if (iRes.status === 'fulfilled') {
+            setInfractions(Array.isArray(iRes.value?.data) ? iRes.value.data : []);
+          } else {
+            setInfractions([]);
+          }
+
+          if (dRes.status === 'fulfilled') {
+            setDisciplinaryDecisions(Array.isArray(dRes.value?.data) ? dRes.value.data : []);
+          } else {
+            setDisciplinaryDecisions([]);
+          }
+
           setStaff([]);
         }
       } catch {
@@ -1171,21 +1266,29 @@ export default function DisciplinaryCasesPage({ role = 'teacher' }) {
     const reason = reportForm.reason.trim();
     const typeInfraction = reportForm.typeInfraction.trim();
 
-    if (!studentId || !reason || !typeInfraction) {
+    if (!studentId || !typeInfraction) {
       setReportError('Please fill in all required fields.');
       return;
     }
 
     try {
       setReportSubmitting(true);
+      const payload = {
+        studentId,
+        reason,
+        titre: 'Teacher disciplinary report',
+      };
+
+      const selectedInfractionId = Number(typeInfraction);
+      if (Number.isInteger(selectedInfractionId) && selectedInfractionId > 0) {
+        payload.infractionId = selectedInfractionId;
+      } else {
+        payload.typeInfraction = typeInfraction;
+      }
+
       await request('/api/v1/disciplinary/cases', {
         method: 'POST',
-        body: JSON.stringify({
-          studentId,
-          reason,
-          titre: 'Teacher disciplinary report',
-          typeInfraction,
-        }),
+        body: JSON.stringify(payload),
       });
 
       await loadCases();
@@ -1213,7 +1316,12 @@ export default function DisciplinaryCasesPage({ role = 'teacher' }) {
   /* Derived data */
   const filteredCases = cases.filter((c) => {
     if (filterStatus !== 'all' && c.status !== filterStatus) return false;
-    if (filterType !== 'All' && c.violationType !== filterType) return false;
+    if (filterType !== 'All' && c.violationType) {
+      // Check if violationType contains the filter value (case-insensitive)
+      const violationLower = c.violationType.toLowerCase();
+      const filterLower = filterType.toLowerCase();
+      if (!violationLower.includes(filterLower)) return false;
+    }
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       return c.studentName.toLowerCase().includes(q) || c.studentId.includes(q) || c.id.toLowerCase().includes(q);
@@ -1230,8 +1338,36 @@ export default function DisciplinaryCasesPage({ role = 'teacher' }) {
 
   const filteredMeetings = meetings
     .filter(m => {
-      // For teachers, only show meetings where they are president
-      if (canTeacherReport && !isAdminView && m.presidentEnseignantId !== user?.enseignant?.id) return false;
+      const currentUserId = user?.enseignant?.id;
+      
+      // For teachers (reporters), show meetings where they are president OR members
+      if (canTeacherReport && !isAdminView) {
+        const isPresident = m.presidentEnseignantId === currentUserId;
+        const isRapporteur = m.rapporteurEnseignantId === currentUserId;
+        const isMember = Array.isArray(m.membres) && 
+          m.membres.some(mem => mem.enseignantId === currentUserId);
+        
+        // Show if president, rapporteur, or member
+        if (!isPresident && !isRapporteur && !isMember) return false;
+      }
+      
+      // For presidents viewing "Decision Meetings" tab: only show their president meetings
+      if (isPresidentView && activeTab === 'meetings') {
+        if (m.presidentEnseignantId !== currentUserId) return false;
+      }
+      
+      // For presidents viewing "My Meetings" tab: show meetings where they are members (not president)
+      if (isPresidentView && activeTab === 'my-meetings') {
+        const isPresident = m.presidentEnseignantId === currentUserId;
+        const isRapporteur = m.rapporteurEnseignantId === currentUserId;
+        
+        // Check if user is in the membres array
+        const isMember = Array.isArray(m.membres) && 
+          m.membres.some(mem => mem.enseignantId === currentUserId);
+        
+        if (isPresident) return false; // Don't show their own meetings
+        if (!isRapporteur && !isMember) return false; // Only show if member or rapporteur
+      }
       
       if (meetingFilterStatus !== 'all' && m.status !== meetingFilterStatus) return false;
       if (meetingSearch) {
@@ -1284,12 +1420,20 @@ export default function DisciplinaryCasesPage({ role = 'teacher' }) {
   }
 
   if (selectedMeeting) {
+    // Determine if user is viewing in read-only mode (member of meeting they don't preside over)
+    const isUserPresident = selectedMeeting.presidentEnseignantId === user?.enseignant?.id;
+    const isUserMember = (selectedMeeting.membreIds || []).includes(String(user?.enseignant?.id));
+    const isUserRapporteur = selectedMeeting.rapporteurEnseignantId === user?.enseignant?.id;
+    const viewOnly = isPresidentView && !isUserPresident && (isUserMember || isUserRapporteur);
+
     return (
       <MeetingDetailView
         meeting={selectedMeeting}
         cases={cases}
         staff={staff}
-        canManageMeeting={canManageMeetings}
+        decisionChoices={disciplinaryDecisions}
+        canManageMeeting={canManageMeetings && !viewOnly}
+        viewOnly={viewOnly}
         currentEnseignantId={user?.enseignant?.id ?? null}
         onBack={() => setSelectedMeeting(null)}
         onMeetingUpdated={async (updatedMeeting) => {
@@ -1366,6 +1510,7 @@ export default function DisciplinaryCasesPage({ role = 'teacher' }) {
       {canTeacherReport && (
         <TeacherQuickReport
           students={students}
+          infractions={infractions}
           form={reportForm}
           onChange={updateReportForm}
           onSubmit={handleTeacherReportSubmit}
@@ -1418,10 +1563,11 @@ export default function DisciplinaryCasesPage({ role = 'teacher' }) {
           onDeleteCase={handleDeleteCase}
           canDeleteCases={isAdminView || canTeacherReport}
           user={user}
+          infractions={infractions}
         />
       )}
 
-      {activeTab === 'meetings' && (
+      {(activeTab === 'meetings' || activeTab === 'my-meetings') && (
         <MeetingsTab
           meetings={filteredMeetings}
           cases={cases}
@@ -1502,6 +1648,15 @@ function AddCouncilMemberModal({ meetings = [], staff = [], onClose, onAdded }) 
   const [selectedRole, setSelectedRole] = useState('membre');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const filteredTeachers = useMemo(() => {
+    if (!searchQuery.trim()) return teacherOptions;
+    const q = searchQuery.toLowerCase();
+    return teacherOptions.filter((teacher) =>
+      teacher.name.toLowerCase().includes(q) || teacher.grade.toLowerCase().includes(q)
+    );
+  }, [teacherOptions, searchQuery]);
 
   useEffect(() => {
     if (availableConseils.length === 0) {
@@ -1517,17 +1672,17 @@ function AddCouncilMemberModal({ meetings = [], staff = [], onClose, onAdded }) 
   }, [availableConseils, selectedConseilId]);
 
   useEffect(() => {
-    if (teacherOptions.length === 0) {
+    if (filteredTeachers.length === 0) {
       setSelectedTeacherId('');
       return;
     }
 
-    if (teacherOptions.some((teacher) => String(teacher.id) === selectedTeacherId)) {
+    if (filteredTeachers.some((teacher) => String(teacher.id) === selectedTeacherId)) {
       return;
     }
 
-    setSelectedTeacherId(String(teacherOptions[0].id));
-  }, [teacherOptions, selectedTeacherId]);
+    setSelectedTeacherId(String(filteredTeachers[0].id));
+  }, [filteredTeachers, selectedTeacherId]);
 
   const handleSubmit = async () => {
     const conseilId = Number(selectedConseilId);
@@ -1615,24 +1770,52 @@ function AddCouncilMemberModal({ meetings = [], staff = [], onClose, onAdded }) 
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-ink-secondary mb-1">Teacher</label>
-            <select
-              value={selectedTeacherId}
-              onChange={(e) => setSelectedTeacherId(e.target.value)}
-              className="w-full px-3 py-2.5 text-sm bg-control-bg border border-control-border rounded-md text-ink focus:ring-2 focus:ring-brand/30 focus:border-brand"
-            >
-              <option value="">Select teacher...</option>
-              {teacherOptions.map((teacher) => (
-                <option key={teacher.id} value={teacher.id}>
-                  {teacher.name} ({teacher.grade})
-                </option>
-              ))}
-            </select>
-            {teacherOptions.length === 0 && (
-              <p className="mt-2 text-xs text-ink-muted">
-                No teachers available. Please reload the page and make sure disciplinary staff data loads correctly.
-              </p>
-            )}
+            <label className="block text-sm font-medium text-ink-secondary mb-1">Search Teacher</label>
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search by name or grade..."
+              className="w-full px-3 py-2.5 text-sm bg-control-bg border border-control-border rounded-md text-ink placeholder:text-ink-muted focus:ring-2 focus:ring-brand/30 focus:border-brand"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-ink-secondary mb-2">Select Teacher</label>
+            <div className="bg-control-bg border border-control-border rounded-md max-h-48 overflow-y-auto">
+              {filteredTeachers.length > 0 ? (
+                <div className="divide-y divide-edge-subtle">
+                  {filteredTeachers.map((teacher) => (
+                    <button
+                      key={teacher.id}
+                      type="button"
+                      onClick={() => setSelectedTeacherId(String(teacher.id))}
+                      className={`w-full text-left px-3 py-2.5 text-sm transition-colors hover:bg-surface-200 ${
+                        String(selectedTeacherId) === String(teacher.id)
+                          ? 'bg-brand/10 text-brand font-medium'
+                          : 'text-ink'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="font-medium">{teacher.name}</p>
+                          <p className="text-xs text-ink-secondary">{teacher.grade}</p>
+                        </div>
+                        {String(selectedTeacherId) === String(teacher.id) && (
+                          <span className="text-brand font-semibold">✓</span>
+                        )}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="px-3 py-4 text-center">
+                  <p className="text-sm text-ink-muted">
+                    {searchQuery.trim() ? 'No teachers found matching your search.' : 'No teachers available.'}
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
 
           <div>
@@ -1665,7 +1848,7 @@ function AddCouncilMemberModal({ meetings = [], staff = [], onClose, onAdded }) 
             </button>
             <button
               onClick={handleSubmit}
-              disabled={submitting || teacherOptions.length === 0}
+              disabled={submitting || filteredTeachers.length === 0 || !selectedTeacherId}
               className="px-4 py-2.5 text-sm font-medium text-white bg-brand rounded-md hover:bg-brand-hover active:bg-brand-dark transition-all duration-150 flex items-center gap-2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {icons.users({ className: 'w-4 h-4' })}
@@ -1692,7 +1875,22 @@ function CasesTab({
   onSelectCase, onConvoke, onDeleteCase,
   canDeleteCases = false,
   user,
+  infractions = [],
 }) {
+  // Build infraction options from the infractions data
+  const infractionOptions = useMemo(() => {
+    const options = ['All'];
+    if (Array.isArray(infractions) && infractions.length > 0) {
+      infractions.forEach(inf => {
+        const label = inf.nom_en || inf.nom_ar || `Infraction #${inf.id}`;
+        if (!options.includes(label)) {
+          options.push(label);
+        }
+      });
+    }
+    return options.length > 1 ? options : ['All', 'Plagiarism', 'Exam Fraud', 'Misconduct'];
+  }, [infractions]);
+
   return (
     <div className="bg-surface rounded-lg border border-edge shadow-card">
 
@@ -1728,7 +1926,7 @@ function CasesTab({
             onChange={e => setFilterType(e.target.value)}
             className="px-3 py-1.5 text-sm bg-control-bg border border-control-border rounded-md text-ink-secondary focus:ring-2 focus:ring-brand/30 focus:border-brand transition-colors"
           >
-            {VIOLATION_TYPES.map(t => (
+            {infractionOptions.map(t => (
               <option key={t} value={t}>{t === 'All' ? 'All Types' : t}</option>
             ))}
           </select>
@@ -1923,7 +2121,17 @@ function MeetingsTab({ meetings, cases, filterStatus, setFilterStatus, search, s
               </tr>
             ) : (
               meetings.map(m => {
-                const relatedCases = m.caseIds.map(cid => cases.find(c => c.id === cid)).filter(Boolean);
+                // Extract dossiers directly from the meeting's dossiers array if available
+                const caseDisplay = Array.isArray(m.dossiers) && m.dossiers.length > 0
+                  ? m.dossiers.map(d => {
+                      const studentName = [d.etudiant?.user?.prenom, d.etudiant?.user?.nom].filter(Boolean).join(' ').trim() || 'Unknown';
+                      return studentName;
+                    })
+                  : m.caseIds.map(cid => {
+                      const c = cases.find(c => c.id === cid || c.id === `CASE-${cid}` || `CASE-${c.id}` === cid);
+                      return c?.studentName || 'Unknown';
+                    }).filter(Boolean);
+                
                 return (
                   <tr
                     key={m.id}
@@ -1951,9 +2159,13 @@ function MeetingsTab({ meetings, cases, filterStatus, setFilterStatus, search, s
                     </td>
                     <td className="px-6 py-3.5">
                       <div className="flex flex-col gap-0.5">
-                        {relatedCases.map(rc => (
-                          <span key={rc.id} className="text-xs text-ink-secondary">{rc.studentName}</span>
-                        ))}
+                        {caseDisplay.length > 0 ? (
+                          caseDisplay.map((name, idx) => (
+                            <span key={idx} className="text-xs text-ink-secondary">{name}</span>
+                          ))
+                        ) : (
+                          <span className="text-xs text-ink-muted">--</span>
+                        )}
                       </div>
                     </td>
                     <td className="px-6 py-3.5 hidden lg:table-cell max-w-[180px]">
@@ -2028,6 +2240,12 @@ function NewMeetingTab({ cases, staff = STAFF_MEMBERS_DEFAULT, preselected = [],
     presidentId: staffMembers[0]?.id || null,
     memberIds: [],
   });
+  const [presidentSearch, setPresidentSearch] = useState('');
+  const [memberSearch, setMemberSearch] = useState('');
+  const [presidentSearchResults, setPresidentSearchResults] = useState([]);
+  const [memberSearchResults, setMemberSearchResults] = useState([]);
+  const [showPresidentResults, setShowPresidentResults] = useState(false);
+  const [showMemberResults, setShowMemberResults] = useState(false);
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
@@ -2064,6 +2282,45 @@ function NewMeetingTab({ cases, staff = STAFF_MEMBERS_DEFAULT, preselected = [],
     return !isPresident && !isReporter;
   }).length;
 
+  // Search staff by name or grade
+  const handlePresidentSearch = async (query) => {
+    setPresidentSearch(query);
+    if (query.length < 2) {
+      setPresidentSearchResults([]);
+      setShowPresidentResults(false);
+      return;
+    }
+
+    try {
+      const response = await request(`/api/v1/disciplinary/staff/search?q=${encodeURIComponent(query)}`);
+      if (response?.success && Array.isArray(response.data)) {
+        setPresidentSearchResults(response.data);
+        setShowPresidentResults(true);
+      }
+    } catch (error) {
+      console.error('Failed to search staff:', error);
+    }
+  };
+
+  const handleMemberSearch = async (query) => {
+    setMemberSearch(query);
+    if (query.length < 2) {
+      setMemberSearchResults([]);
+      setShowMemberResults(false);
+      return;
+    }
+
+    try {
+      const response = await request(`/api/v1/disciplinary/staff/search?q=${encodeURIComponent(query)}`);
+      if (response?.success && Array.isArray(response.data)) {
+        setMemberSearchResults(response.data);
+        setShowMemberResults(true);
+      }
+    } catch (error) {
+      console.error('Failed to search staff:', error);
+    }
+  };
+
   useEffect(() => {
     if (staffMembers.length === 0) return;
 
@@ -2097,6 +2354,12 @@ function NewMeetingTab({ cases, staff = STAFF_MEMBERS_DEFAULT, preselected = [],
       presidentId: Number.isInteger(presidentId) && presidentId > 0 ? presidentId : null,
       memberIds: prev.memberIds.filter((id) => Number(id) !== presidentId),
     }));
+    setPresidentSearch('');
+    setShowPresidentResults(false);
+  };
+
+  const handleSelectPresident = (staffMember) => {
+    handlePresidentChange(staffMember.id);
   };
 
   const toggleMember = (memberId) => {
@@ -2122,6 +2385,12 @@ function NewMeetingTab({ cases, staff = STAFF_MEMBERS_DEFAULT, preselected = [],
         memberIds: [...prev.memberIds, numericMemberId],
       };
     });
+  };
+
+  const handleAddMember = (staffMember) => {
+    toggleMember(staffMember.id);
+    setMemberSearch('');
+    setShowMemberResults(false);
   };
 
   const handleSave = async () => {
@@ -2258,7 +2527,7 @@ function NewMeetingTab({ cases, staff = STAFF_MEMBERS_DEFAULT, preselected = [],
             className="w-full px-3 py-2.5 text-sm bg-control-bg border border-control-border rounded-md text-ink focus:ring-2 focus:ring-brand/30 focus:border-brand"
           >
             <option value="" disabled>+ Add a case...</option>
-            {cases.filter(c => !selectedCaseIds.includes(c.id)).map(c => (
+            {cases.filter(c => !selectedCaseIds.includes(c.id) && c.status === 'signale').map(c => (
               <option key={c.id} value={c.id}>{c.studentName} ({c.id})</option>
             ))}
           </select>
@@ -2324,21 +2593,34 @@ function NewMeetingTab({ cases, staff = STAFF_MEMBERS_DEFAULT, preselected = [],
         <div className="bg-surface rounded-lg border border-edge shadow-card p-6">
           <h3 className="text-base font-semibold text-ink mb-4">Council Members</h3>
 
-          {/* President */}
+          {/* President with search */}
           <div className="mb-4">
             <label className="block text-xs font-semibold text-ink-muted uppercase tracking-wider mb-2">President</label>
-            <select
-              value={form.presidentId || ''}
-              onChange={(e) => handlePresidentChange(e.target.value)}
-              className="w-full px-3 py-2.5 text-sm bg-control-bg border border-control-border rounded-md text-ink focus:ring-2 focus:ring-brand/30 focus:border-brand"
-            >
-              <option value="" disabled>Select president...</option>
-              {staffMembers.map((member) => (
-                <option key={member.id} value={member.id}>
-                  {member.name} ({member.grade})
-                </option>
-              ))}
-            </select>
+            <div className="relative">
+              <input
+                type="text"
+                placeholder="Search by name or grade..."
+                value={presidentSearch}
+                onChange={(e) => handlePresidentSearch(e.target.value)}
+                onFocus={() => presidentSearch.length >= 2 && setShowPresidentResults(true)}
+                className="w-full px-3 py-2.5 text-sm bg-control-bg border border-control-border rounded-md text-ink focus:ring-2 focus:ring-brand/30 focus:border-brand"
+              />
+              {showPresidentResults && presidentSearchResults.length > 0 && (
+                <div className="absolute top-full left-0 right-0 mt-1 bg-surface border border-edge rounded-md shadow-lg z-50 max-h-48 overflow-y-auto">
+                  {presidentSearchResults.map((member) => (
+                    <button
+                      key={member.id}
+                      onClick={() => handleSelectPresident(member)}
+                      type="button"
+                      className="w-full text-left px-3 py-2 hover:bg-surface-200 transition-colors text-sm text-ink border-b border-edge-subtle last:border-b-0"
+                    >
+                      <span className="font-medium">{member.name}</span>
+                      <span className="text-ink-muted ml-2">({member.grade})</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             {selectedPresident && (
               <div className="mt-2 flex items-center gap-3 px-3 py-2.5 bg-success/5 border border-edge-strong rounded-md">
                 <Avatar name={selectedPresident.name} size="w-6 h-6 text-[9px]" />
@@ -2374,47 +2656,71 @@ function NewMeetingTab({ cases, staff = STAFF_MEMBERS_DEFAULT, preselected = [],
             )}
           </div>
 
-          {/* Members */}
+          {/* Members with search */}
           <div className="mb-4">
             <label className="block text-xs font-semibold text-ink-muted uppercase tracking-wider mb-2">
               Members <span className="normal-case font-normal text-ink-muted">(exactly {MAX_ADDITIONAL_MEMBER_COUNT} required — the reporter is added as rapporteur automatically)</span>
             </label>
-            {availableMemberChoicesCount <= 2 && (
-              <p className="mb-2 text-xs text-ink-muted">
-                Only {availableMemberChoicesCount} selectable teacher{availableMemberChoicesCount === 1 ? '' : 's'} currently available after president/reporter assignment. Add more teacher accounts to select more members.
-              </p>
-            )}
+            <div className="relative mb-3">
+              <input
+                type="text"
+                placeholder="Search by name or grade to add members..."
+                value={memberSearch}
+                onChange={(e) => handleMemberSearch(e.target.value)}
+                onFocus={() => memberSearch.length >= 2 && setShowMemberResults(true)}
+                className="w-full px-3 py-2.5 text-sm bg-control-bg border border-control-border rounded-md text-ink focus:ring-2 focus:ring-brand/30 focus:border-brand"
+              />
+              {showMemberResults && memberSearchResults.length > 0 && (
+                <div className="absolute top-full left-0 right-0 mt-1 bg-surface border border-edge rounded-md shadow-lg z-50 max-h-48 overflow-y-auto">
+                  {memberSearchResults
+                    .filter((member) => {
+                      const isPresident = Number(form.presidentId) === Number(member.id);
+                      const isReporter = primaryReporter?.id != null && Number(primaryReporter.id) === Number(member.id);
+                      const isAlreadySelected = form.memberIds.includes(member.id);
+                      return !isPresident && !isReporter && !isAlreadySelected;
+                    })
+                    .map((member) => (
+                      <button
+                        key={member.id}
+                        onClick={() => handleAddMember(member)}
+                        type="button"
+                        disabled={form.memberIds.length >= MAX_ADDITIONAL_MEMBER_COUNT}
+                        className="w-full text-left px-3 py-2 hover:bg-surface-200 transition-colors text-sm text-ink border-b border-edge-subtle last:border-b-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <span className="font-medium">{member.name}</span>
+                        <span className="text-ink-muted ml-2">({member.grade})</span>
+                      </button>
+                    ))}
+                </div>
+              )}
+            </div>
             <div className="space-y-1">
-              {staffMembers.map((member) => {
-                const isSelected = form.memberIds.includes(member.id);
-                const isPresident = Number(form.presidentId) === Number(member.id);
-                const isReporter = primaryReporter?.id != null && Number(primaryReporter.id) === Number(member.id);
-                const lockBecauseMaxReached = form.memberIds.length >= MAX_ADDITIONAL_MEMBER_COUNT && !isSelected;
-                return (
-                  !isPresident && (
-                    <label
-                      key={member.id}
-                      className="flex items-center gap-3 px-2 py-2 rounded-md hover:bg-surface-200 dark:hover:bg-surface-300/20 transition-colors duration-100 cursor-pointer"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={() => toggleMember(member.id)}
-                        disabled={isReporter || lockBecauseMaxReached}
-                        className="rounded border-control-border text-brand focus:ring-brand/30"
-                      />
-                      <Avatar name={member.name} size="w-6 h-6 text-[9px]" />
-                      <div className="min-w-0">
-                        <p className="text-sm text-ink truncate">{member.name}</p>
-                        <p className="text-[11px] text-ink-muted truncate">Role: Member</p>
+              {form.memberIds.length > 0 && (
+                <div className="mb-2">
+                  <p className="text-xs font-medium text-ink-secondary mb-1">Selected members:</p>
+                  {form.memberIds.map((memberId) => {
+                    const member = staffMembers.find((m) => m.id === memberId);
+                    return member ? (
+                      <div key={memberId} className="flex items-center gap-2 px-2 py-1.5 bg-brand/5 border border-edge-strong rounded-md">
+                        <Avatar name={member.name} size="w-5 h-5 text-[8px]" />
+                        <span className="flex-1 text-sm text-ink">{member.name}</span>
+                        <button
+                          type="button"
+                          onClick={() => toggleMember(memberId)}
+                          className="text-brand/50 hover:text-brand transition-colors"
+                        >
+                          {icons.x({ className: 'w-3 h-3' })}
+                        </button>
                       </div>
-                      {isReporter && (
-                        <span className="ml-auto text-[11px] font-medium text-ink-muted">Reporter</span>
-                      )}
-                    </label>
-                  )
-                );
-              })}
+                    ) : null;
+                  })}
+                </div>
+              )}
+              {form.memberIds.length < MAX_ADDITIONAL_MEMBER_COUNT && (
+                <p className="text-xs text-ink-muted bg-surface-200 rounded-md px-2 py-1">
+                  You need to select {MAX_ADDITIONAL_MEMBER_COUNT - form.memberIds.length} more member{MAX_ADDITIONAL_MEMBER_COUNT - form.memberIds.length === 1 ? '' : 's'}.
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -2464,7 +2770,9 @@ function MeetingDetailView({
   meeting,
   cases,
   staff = STAFF_MEMBERS_DEFAULT,
+  decisionChoices = [],
   canManageMeeting = false,
+  viewOnly = false,
   currentEnseignantId = null,
   onBack,
   onMeetingUpdated,
@@ -2472,9 +2780,42 @@ function MeetingDetailView({
   onFinalized,
 }) {
   const [meetingState, setMeetingState] = useState(meeting);
+  const [relatedCasesData, setRelatedCasesData] = useState([]);
+  
+  // Fetch the full meeting details including related cases when component mounts
+  useEffect(() => {
+    const fetchMeetingDetails = async () => {
+      try {
+        if (meeting?.conseilId) {
+          const response = await request(`/api/v1/disciplinary/conseils/${meeting.conseilId}`);
+          if (response?.data) {
+            const fullMeeting = normalizeMeeting(response.data);
+            setMeetingState(fullMeeting);
+            
+            // Extract and normalize related dossiers from the response
+            if (response.data?.dossiers && Array.isArray(response.data.dossiers)) {
+              const normalizedDossiers = response.data.dossiers.map(normalizeCase).filter(Boolean);
+              setRelatedCasesData(normalizedDossiers);
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch meeting details:', error);
+      }
+    };
+
+    fetchMeetingDetails();
+  }, [meeting?.conseilId]);
+  
   const relatedCases = useMemo(
-    () => (meetingState.caseIds || []).map((cid) => cases.find((c) => c.id === cid)).filter(Boolean),
-    [meetingState.caseIds, cases]
+    () => {
+      // Use related cases from backend if available, otherwise fallback to looking up in cases array
+      if (relatedCasesData.length > 0) {
+        return relatedCasesData;
+      }
+      return (meetingState.caseIds || []).map((cid) => cases.find((c) => c.id === cid)).filter(Boolean);
+    },
+    [meetingState.caseIds, cases, relatedCasesData]
   );
   const staffMembers = useMemo(() => {
     const seenStaffIds = new Set();
@@ -2697,13 +3038,19 @@ function MeetingDetailView({
     });
   };
 
-  const DECISION_OPTIONS = [
-    { value: '', label: 'Choose a decision...' },
-    { value: 'avertissement', label: 'Avertissement' },
-    { value: 'blame', label: 'Blame' },
-    { value: 'suspension', label: 'Suspension' },
-    { value: 'exclusion', label: 'Exclusion' },
-  ];
+  const DECISION_OPTIONS = decisionChoices.length > 0
+    ? [{ value: '', label: 'Choose a decision...' },
+      ...decisionChoices.map((option) => ({
+        value: String(option.id),
+        label: option.nom_en || option.nom_ar || `Decision #${option.id}`,
+      }))]
+    : [
+        { value: '', label: 'Choose a decision...' },
+        { value: 'avertissement', label: 'Avertissement' },
+        { value: 'blame', label: 'Blame' },
+        { value: 'suspension', label: 'Suspension' },
+        { value: 'exclusion', label: 'Exclusion' },
+      ];
 
   const handleUpdateMeeting = async () => {
     if (!canEditOrDeleteMeeting || editBusy || !meetingState.conseilId) return;
@@ -2820,13 +3167,20 @@ function MeetingDetailView({
     try {
       const drafts = relatedCases.map((c) => {
         const d = decisions[c.id] || {};
-        return {
+        const draft = {
           caseId: Number(String(c.id).replace('CASE-', '')),
-          decision: d.decision || 'Dismissed',
           sanctions: d.justification || globalNotes || '',
           dateDecision: new Date().toISOString(),
-          status: 'traite',
         };
+
+        const selectedDecisionId = Number(d.decision);
+        if (Number.isInteger(selectedDecisionId) && selectedDecisionId > 0) {
+          draft.decisionId = selectedDecisionId;
+        } else {
+          draft.decision = d.decision || 'Dismissed';
+        }
+
+        return draft;
       });
 
       const response = await request(`/api/v1/disciplinary/conseils/${meetingState.conseilId}/finaliser`, {
@@ -3054,11 +3408,16 @@ function MeetingDetailView({
         </div>
         <div className="sm:border-l sm:border-edge sm:pl-6">
           <p className="text-xs font-semibold text-ink-muted uppercase tracking-wider mb-2">Related Cases</p>
-          <div className="flex items-center gap-3 flex-wrap">
+          <div className="space-y-2">
             {relatedCases.map((c) => (
-              <div key={c.id} className="flex items-center gap-2 text-xs font-medium text-ink">
-                <Avatar name={c.studentName} size="w-6 h-6 text-[9px]" />
-                {c.studentName}
+              <div key={c.id} className="flex items-start gap-2">
+                <Avatar name={c.studentName} size="w-5 h-5 text-[8px]" />
+                <div className="text-xs">
+                  <p className="font-medium text-ink">{c.studentName}</p>
+                  {c.reporterName && (
+                    <p className="text-ink-secondary">by {c.reporterName}</p>
+                  )}
+                </div>
               </div>
             ))}
           </div>
@@ -3074,6 +3433,11 @@ function MeetingDetailView({
             <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold text-ink">{c.studentName}</p>
               <p className="text-xs text-ink-muted">{c.studentId} · {c.department} · {c.violationType}</p>
+              {c.reporterName && (
+                <p className="text-xs text-ink-secondary mt-1">
+                  Reported by: {c.reporterName}
+                </p>
+              )}
             </div>
             <StatusBadge status={c.status} config={CASE_STATUS_CONFIG} />
           </div>
@@ -3086,45 +3450,74 @@ function MeetingDetailView({
             </p>
           </div>
 
-          {/* Decision form — editable only by president */}
+          {/* Decision form — editable only by president, view-only when finalized */}
           <div className="px-6 pb-6">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-              <div>
-                <label className="block text-sm font-medium text-ink-secondary mb-1">Decision</label>
-                <select
-                  value={decisions[c.id]?.decision || ''}
-                  onChange={(e) => setDecisions((d) => ({ ...d, [c.id]: { ...d[c.id], decision: e.target.value } }))}
-                  disabled={finalized || !isPresident}
-                  className="w-full px-3 py-2.5 text-sm bg-control-bg border border-control-border rounded-md text-ink focus:ring-2 focus:ring-brand/30 focus:border-brand disabled:opacity-60 disabled:cursor-not-allowed"
-                >
-                  {DECISION_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                </select>
+            {finalized && c.decision ? (
+              // Display finalized decision
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-ink-secondary mb-1">Decision</label>
+                    <div className="px-3 py-2.5 text-sm bg-success/5 border border-edge rounded-md text-ink rounded-md">
+                      {c.decision.verdict || 'Decision Recorded'}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-ink-secondary mb-1">Status</label>
+                    <div className="px-3 py-2.5 text-sm bg-success/5 border border-edge rounded-md text-ink rounded-md">
+                      {c.status === 'closed' ? 'Closed' : c.status === 'hearing' ? 'Hearing' : c.status === 'pending' ? 'Pending' : c.status}
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-ink-secondary mb-1">Decision Details</label>
+                  <div className="px-3 py-2.5 text-sm bg-success/5 border border-edge rounded-md text-ink">
+                    {c.decision.details || 'No additional remarks'}
+                  </div>
+                </div>
               </div>
+            ) : (
+              // Edit form for president
               <div>
-                <label className="block text-sm font-medium text-ink-secondary mb-1">New Status</label>
-                <select
-                  value={decisions[c.id]?.newStatus || ''}
-                  onChange={(e) => setDecisions((d) => ({ ...d, [c.id]: { ...d[c.id], newStatus: e.target.value } }))}
-                  disabled={finalized || !isPresident}
-                  className="w-full px-3 py-2.5 text-sm bg-control-bg border border-control-border rounded-md text-ink focus:ring-2 focus:ring-brand/30 focus:border-brand disabled:opacity-60 disabled:cursor-not-allowed"
-                >
-                  {Object.entries(CASE_STATUS_CONFIG).map(([k, v]) => (
-                    <option key={k} value={k}>{v.label}</option>
-                  ))}
-                </select>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+                  <div>
+                    <label className="block text-sm font-medium text-ink-secondary mb-1">Decision</label>
+                    <select
+                      value={decisions[c.id]?.decision || ''}
+                      onChange={(e) => setDecisions((d) => ({ ...d, [c.id]: { ...d[c.id], decision: e.target.value } }))}
+                      disabled={finalized || !isPresident || viewOnly}
+                      className="w-full px-3 py-2.5 text-sm bg-control-bg border border-control-border rounded-md text-ink focus:ring-2 focus:ring-brand/30 focus:border-brand disabled:opacity-60 disabled:cursor-not-allowed"
+                    >
+                      {DECISION_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-ink-secondary mb-1">New Status</label>
+                    <select
+                      value={decisions[c.id]?.newStatus || ''}
+                      onChange={(e) => setDecisions((d) => ({ ...d, [c.id]: { ...d[c.id], newStatus: e.target.value } }))}
+                      disabled={finalized || !isPresident || viewOnly}
+                      className="w-full px-3 py-2.5 text-sm bg-control-bg border border-control-border rounded-md text-ink focus:ring-2 focus:ring-brand/30 focus:border-brand disabled:opacity-60 disabled:cursor-not-allowed"
+                    >
+                      {Object.entries(CASE_STATUS_CONFIG).map(([k, v]) => (
+                        <option key={k} value={k}>{v.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-ink-secondary mb-1">Justification</label>
+                  <textarea
+                    value={decisions[c.id]?.justification || ''}
+                    onChange={(e) => setDecisions((d) => ({ ...d, [c.id]: { ...d[c.id], justification: e.target.value } }))}
+                    placeholder="Grounds and details for the decision..."
+                    rows={3}
+                    disabled={finalized || !isPresident || viewOnly}
+                    className="w-full px-3 py-2.5 text-sm bg-control-bg border border-control-border rounded-md text-ink placeholder:text-ink-muted focus:ring-2 focus:ring-brand/30 focus:border-brand resize-none disabled:opacity-60 disabled:cursor-not-allowed"
+                  />
+                </div>
               </div>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-ink-secondary mb-1">Justification</label>
-              <textarea
-                value={decisions[c.id]?.justification || ''}
-                onChange={(e) => setDecisions((d) => ({ ...d, [c.id]: { ...d[c.id], justification: e.target.value } }))}
-                placeholder="Grounds and details for the decision..."
-                rows={3}
-                disabled={finalized || !isPresident}
-                className="w-full px-3 py-2.5 text-sm bg-control-bg border border-control-border rounded-md text-ink placeholder:text-ink-muted focus:ring-2 focus:ring-brand/30 focus:border-brand resize-none disabled:opacity-60 disabled:cursor-not-allowed"
-              />
-            </div>
+            )}
           </div>
         </div>
       ))}
@@ -3137,13 +3530,13 @@ function MeetingDetailView({
           onChange={(e) => setGlobalNotes(e.target.value)}
           placeholder="Summary of deliberations, general observations..."
           rows={4}
-          disabled={finalized || !isPresident}
+          disabled={finalized || !isPresident || viewOnly}
           className="w-full px-3 py-2.5 text-sm bg-control-bg border border-control-border rounded-md text-ink placeholder:text-ink-muted focus:ring-2 focus:ring-brand/30 focus:border-brand resize-none disabled:opacity-60 disabled:cursor-not-allowed"
         />
       </div>
 
       {/* Finalize — president only */}
-      {!finalized && isPresident && (
+      {!finalized && isPresident && !viewOnly && (
         <div className="flex justify-end">
           <button
             onClick={handleFinalize}

@@ -84,7 +84,6 @@ function Section({ title, icon, children, action }) {
 export default function CaseDetailPage({ caseData, onBack, canManageActions = true, onCreateMeeting = null, canDeleteCase = false, onDeleteCase = null }) {
   const navigate = useNavigate();
   const [showSanctionModal, setShowSanctionModal] = useState(false);
-  const [showSummonsModal, setShowSummonsModal] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const safeCaseData = {
     ...caseData,
@@ -238,43 +237,32 @@ export default function CaseDetailPage({ caseData, onBack, canManageActions = tr
           </Section>
 
           {/* ── Decision / Sanction Box ─────────────────────────── */}
-          {safeCaseData.decision && (
+          {(safeCaseData.decision || safeCaseData.status === 'closed') && (
             <Section
               title="Decision & Sanction"
               icon={<svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 3v17.25m0 0c-1.472 0-2.882.265-4.185.75M12 20.25c1.472 0 2.882.265 4.185.75M18.75 4.97A48.416 48.416 0 0012 4.5c-2.291 0-4.545.16-6.75.47m13.5 0c1.01.143 2.01.317 3 .52m-3-.52l2.62 10.726c.122.499-.106 1.028-.589 1.202a5.988 5.988 0 01-2.031.352 5.988 5.988 0 01-2.031-.352c-.483-.174-.711-.703-.59-1.202L18.75 4.97zm-16.5.52c.99-.203 1.99-.377 3-.52m0 0l2.62 10.726c.122.499-.106 1.028-.589 1.202a5.989 5.989 0 01-2.031.352 5.989 5.989 0 01-2.031-.352c-.483-.174-.711-.703-.59-1.202L5.25 4.97z" /></svg>}
             >
               <div className="p-6">
-                {/* Verdict badge */}
-                <div className="flex items-center gap-3 mb-4">
-                  <span className={`px-3 py-1 text-sm font-semibold rounded-md ${
-                    safeCaseData.decision.verdict === 'Warning' ? 'bg-warning/5 text-warning border border-edge-strong'
-                    : safeCaseData.decision.verdict === 'Suspension' ? 'bg-danger/5 text-danger border border-edge-strong'
-                    : safeCaseData.decision.verdict === 'Expulsion' ? 'bg-danger/10 text-danger border border-edge-strong'
-                    : 'bg-surface-200 text-ink-secondary border border-edge'
-                  }`}>
-                    {safeCaseData.decision.verdict}
-                  </span>
-                  <span className="text-xs text-ink-muted">Issued {formatDate(safeCaseData.decision.date)}</span>
-                </div>
+                {safeCaseData.decision ? (
+                  <>
+                    {/* Verdict badge */}
+                    <div className="flex items-center gap-3 mb-4">
+                      <span className="px-3 py-1 text-sm font-semibold rounded-md bg-success/5 text-success border border-edge-strong">
+                        {safeCaseData.decision.verdict || 'Decision Recorded'}
+                      </span>
+                      <span className="text-xs text-ink-muted">Issued {formatDate(safeCaseData.decision.date)}</span>
+                    </div>
 
-                {/* Details */}
-                <div className="bg-surface-200 rounded-lg p-4 border border-edge-subtle">
-                  <p className="text-sm text-ink leading-relaxed">{safeCaseData.decision.details}</p>
-                </div>
-
-                {/* Digital signature placeholder */}
-                <div className="mt-4 pt-4 border-t border-edge-subtle flex items-center justify-between">
-                  <div>
-                    <p className="text-xs text-ink-muted">Issued by</p>
-                    <p className="text-sm font-medium text-ink mt-0.5">{safeCaseData.decision.issuedBy}</p>
+                    {/* Details */}
+                    <div className="bg-surface-200 rounded-lg p-4 border border-edge-subtle">
+                      <p className="text-sm text-ink leading-relaxed">{safeCaseData.decision.details || 'No additional remarks'}</p>
+                    </div>
+                  </>
+                ) : (
+                  <div className="p-4 bg-surface-200 rounded-lg border border-edge-subtle text-center">
+                    <p className="text-sm text-ink-muted">Case has been closed. Decision details will appear here once finalized.</p>
                   </div>
-                  <div className="flex items-center gap-2 px-3 py-2 bg-success/5 border border-edge-strong rounded-md">
-                    <svg className="w-4 h-4 text-success" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    <span className="text-xs font-medium text-success">Digitally Signed</span>
-                  </div>
-                </div>
+                )}
               </div>
             </Section>
           )}
@@ -357,30 +345,7 @@ export default function CaseDetailPage({ caseData, onBack, canManageActions = tr
           </div>
 
           {/* ── Summons / Convocation ─────────────────────────── */}
-          <div className="bg-surface rounded-lg border border-edge shadow-card p-6">
-            <div className="flex items-center gap-2 mb-4">
-              <svg className="w-5 h-5 text-ink-tertiary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 9v.906a2.25 2.25 0 01-1.183 1.981l-6.478 3.488M2.25 9v.906a2.25 2.25 0 001.183 1.981l6.478 3.488m8.839 2.51l-4.66-2.51m0 0l-1.023-.55a2.25 2.25 0 00-2.134 0l-1.022.55m0 0l-4.661 2.51m16.5 1.615a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V8.844a2.25 2.25 0 011.183-1.981l7.5-4.039a2.25 2.25 0 012.134 0l7.5 4.039a2.25 2.25 0 011.183 1.98V19.5z" />
-              </svg>
-              <h3 className="text-sm font-semibold text-ink">Summons</h3>
-            </div>
-
-            {safeCaseData.hearingDate ? (
-              <div className="bg-brand/5 border border-edge-strong rounded-lg p-3 mb-4">
-                <p className="text-xs text-ink-muted">Hearing Date</p>
-                <p className="text-sm font-semibold text-brand mt-0.5">{formatDate(safeCaseData.hearingDate)}</p>
-              </div>
-            ) : (
-              <p className="text-xs text-ink-muted mb-4">No hearing scheduled yet.</p>
-            )}
-
-            <button className="w-full px-3 py-2.5 text-sm font-medium text-white bg-brand rounded-md hover:bg-brand-hover active:bg-brand-dark transition-all duration-150 flex items-center justify-center gap-2">
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m.75 12l3 3m0 0l3-3m-3 3v-6m-1.5-9H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
-              </svg>
-              Generate Summons Letter
-            </button>
-          </div>
+          {/* Summons section removed - no longer used */}
         </div>
       </div>
 
@@ -442,64 +407,7 @@ export default function CaseDetailPage({ caseData, onBack, canManageActions = tr
         </>
       )}
 
-      {/* ── Schedule Hearing Modal ──────────────────────────── */}
-      {canManageActions && showSummonsModal && (
-        <>
-          <div className="fixed inset-0 bg-black/30 z-50" onClick={() => setShowSummonsModal(false)} />
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <div className="bg-surface rounded-lg shadow-card border border-edge w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
-              <div className="flex items-center gap-3 mb-4">
-                <div className="w-10 h-10 rounded-lg bg-brand-light flex items-center justify-center">
-                  <svg className="w-5 h-5 text-brand" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5" />
-                  </svg>
-                </div>
-                <div>
-                  <h3 className="text-base font-semibold text-ink">Schedule Hearing</h3>
-                  <p className="text-xs text-ink-tertiary">Set the date for the disciplinary hearing.</p>
-                </div>
-              </div>
-
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-ink-secondary mb-1.5">Hearing Date</label>
-                <input
-                  type="date"
-                  value={hearingDate}
-                  onChange={(e) => setHearingDate(e.target.value)}
-                  className="w-full px-3 py-2.5 text-sm bg-control-bg border border-control-border rounded-md text-ink focus:ring-2 focus:ring-brand/30 focus:border-brand"
-                />
-              </div>
-
-              <div className="mb-6">
-                <label className="block text-sm font-medium text-ink-secondary mb-1.5">Location</label>
-                <input
-                  type="text"
-                  defaultValue="Administration Building, Room 102"
-                  className="w-full px-3 py-2.5 text-sm bg-control-bg border border-control-border rounded-md text-ink focus:ring-2 focus:ring-brand/30 focus:border-brand"
-                />
-              </div>
-
-              <div className="flex items-center justify-end gap-3">
-                <button
-                  onClick={() => setShowSummonsModal(false)}
-                  className="px-4 py-2 text-sm font-medium text-ink-secondary bg-surface border border-edge rounded-md hover:bg-surface-200 transition-colors duration-150"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={() => setShowSummonsModal(false)}
-                  className="px-4 py-2 text-sm font-medium text-white bg-brand rounded-md hover:bg-brand-hover transition-colors duration-150 flex items-center gap-2"
-                >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  Confirm & Generate Letter
-                </button>
-              </div>
-            </div>
-          </div>
-        </>
-      )}
+      {/* Summons modal removed */}
     </div>
   );
 }

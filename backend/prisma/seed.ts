@@ -1,7 +1,7 @@
 /// <reference types="node" />
 
 import "dotenv/config";
-import { CategorieDocument, PrismaClient } from "@prisma/client";
+import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
@@ -449,13 +449,7 @@ async function main() {
   await ensureEnseignement(teacher2User.enseignant.id, moduleAI.id, promo2025B.id, "cours");
   await ensureEnseignement(teacher2User.enseignant.id, moduleCloud.id, promo2025B.id, "tp");
 
-  const defaultDocumentTypes: Array<{
-    nomAr: string;
-    nomEn: string;
-    categorie: CategorieDocument;
-    descriptionAr: string;
-    descriptionEn: string;
-  }> = [
+  const defaultDocumentTypes = [
     {
       nomAr: "شهادة عمل",
       nomEn: "Work Certificate",
@@ -497,7 +491,7 @@ async function main() {
     const existing = await prisma.documentType.findFirst({
       where: {
         nom_en: item.nomEn,
-        categorie: item.categorie,
+        categorie: item.categorie as any,
       },
       select: { id: true },
     });
@@ -508,7 +502,7 @@ async function main() {
       data: {
         nom_ar: item.nomAr,
         nom_en: item.nomEn,
-        categorie: item.categorie,
+        categorie: item.categorie as any,
         description_ar: item.descriptionAr,
         description_en: item.descriptionEn,
       },
@@ -518,6 +512,327 @@ async function main() {
   for (const item of defaultDocumentTypes) {
     await ensureDocumentType(item);
   }
+
+  // ── Disciplinary infractions ─────────────────────────────────────────
+  const defaultInfractions = [
+    {
+      nom_ar: "غش في الامتحانات",
+      nom_en: "Exam Fraud",
+      description_ar: "محاولة الغش أو النسخ في الامتحانات والاختبارات.",
+      description_en: "Attempting to cheat or copy during exams and tests.",
+      gravite: "faible",
+    },
+    {
+      nom_ar: "رفض الطاعة",
+      nom_en: "Refusal to Obey",
+      description_ar: "عدم الامتثال لتعليمات الأساتذة أو الإدارة.",
+      description_en: "Failure to comply with instructions from teachers or administration.",
+      gravite: "moyenne",
+    },
+    {
+      nom_ar: "تصحيح مزدوج غير مبرر",
+      nom_en: "Unfounded Double Correction",
+      description_ar: "طلب تصحيح إضافي بدون مبررات مقنعة.",
+      description_en: "Requesting additional correction without valid justifications.",
+      gravite: "moyenne",
+    },
+    {
+      nom_ar: "تكرار الجريمة من الدرجة الأولى",
+      nom_en: "1st Degree Recidivism",
+      description_ar: "تكرار مخالفة تأديبية سابقة من الدرجة الأولى.",
+      description_en: "Recurrence of a previous first-degree disciplinary offense.",
+      gravite: "grave",
+    },
+    {
+      nom_ar: "فوضى منظمة",
+      nom_en: "Organized Disorder",
+      description_ar: "تنظيم أو المشاركة في أعمال فوضى جماعية.",
+      description_en: "Organizing or participating in collective acts of disorder.",
+      gravite: "grave",
+    },
+    {
+      nom_ar: "عنف وتهديدات",
+      nom_en: "Violence and Threats",
+      description_ar: "استخدام العنف الجسدي أو التهديدات ضد الآخرين.",
+      description_en: "Use of physical violence or threats against others.",
+      gravite: "grave",
+    },
+    {
+      nom_ar: "حيازة وسائل ضارة",
+      nom_en: "Harmful Means Possession",
+      description_ar: "حيازة أدوات أو مواد ضارة داخل المؤسسة.",
+      description_en: "Possession of harmful tools or substances within the institution.",
+      gravite: "grave",
+    },
+    {
+      nom_ar: "تزوير وثائق",
+      nom_en: "Document Forgery",
+      description_ar: "تزوير أو التلاعب في الوثائق الرسمية.",
+      description_en: "Forgery or manipulation of official documents.",
+      gravite: "tres_grave",
+    },
+    {
+      nom_ar: "انتحال شخصية",
+      nom_en: "Identity Usurpation",
+      description_ar: "انتحال شخصية شخص آخر أو التظاهر بغير الهوية الحقيقية.",
+      description_en: "Impersonating another person or assuming a false identity.",
+      gravite: "tres_grave",
+    },
+    {
+      nom_ar: "تشهير",
+      nom_en: "Defamation",
+      description_ar: "نشر معلومات كاذبة تضر بسمعة الآخرين.",
+      description_en: "Spreading false information that harms others' reputation.",
+      gravite: "grave",
+    },
+    {
+      nom_ar: "تعطيل بيداغوجي",
+      nom_en: "Pedagogical Disruption",
+      description_ar: "تعطيل سير العملية التعليمية عمداً.",
+      description_en: "Deliberately disrupting the educational process.",
+      gravite: "grave",
+    },
+    {
+      nom_ar: "سرقة واختلاس",
+      nom_en: "Theft and Misappropriation",
+      description_ar: "سرقة ممتلكات المؤسسة أو اختلاس أموال.",
+      description_en: "Theft of institutional property or embezzlement of funds.",
+      gravite: "tres_grave",
+    },
+    {
+      nom_ar: "تدهور الممتلكات",
+      nom_en: "Property Deterioration",
+      description_ar: "إتلاف أو تخريب ممتلكات المؤسسة عمداً.",
+      description_en: "Deliberate damage or destruction of institutional property.",
+      gravite: "grave",
+    },
+    {
+      nom_ar: "إهانات للموظفين/الطلاب",
+      nom_en: "Insults to Staff/Students",
+      description_ar: "إهانة أو سب الموظفين أو الطلاب.",
+      description_en: "Insulting or verbally abusing staff or students.",
+      gravite: "grave",
+    },
+    {
+      nom_ar: "رفض الرقابة التنظيمية",
+      nom_en: "Regulatory Control Refusal",
+      description_ar: "رفض الامتثال للرقابة الإدارية أو الأمنية.",
+      description_en: "Refusal to comply with administrative or security oversight.",
+      gravite: "grave",
+    },
+    {
+      nom_ar: "فوضى منظمة",
+      nom_en: "Organized Disorder",
+      description_ar: "تنظيم أو المشاركة في أعمال فوضى جماعية.",
+      description_en: "Organizing or participating in collective acts of disorder.",
+      gravite: "grave",
+    },
+    {
+      nom_ar: "عنف وتهديدات",
+      nom_en: "Violence and Threats",
+      description_ar: "استخدام العنف الجسدي أو التهديدات ضد الآخرين.",
+      description_en: "Use of physical violence or threats against others.",
+      gravite: "grave",
+    },
+    {
+      nom_ar: "حيازة وسائل ضارة",
+      nom_en: "Harmful Means Possession",
+      description_ar: "حيازة أدوات أو مواد ضارة داخل المؤسسة.",
+      description_en: "Possession of harmful tools or substances within the institution.",
+      gravite: "grave",
+    },
+    {
+      nom_ar: "تزوير وثائق",
+      nom_en: "Document Forgery",
+      description_ar: "تزوير أو التلاعب في الوثائق الرسمية.",
+      description_en: "Forgery or manipulation of official documents.",
+      gravite: "tres_grave",
+    },
+    {
+      nom_ar: "انتحال شخصية",
+      nom_en: "Identity Usurpation",
+      description_ar: "انتحال شخصية شخص آخر أو التظاهر بغير الهوية الحقيقية.",
+      description_en: "Impersonating another person or assuming a false identity.",
+      gravite: "tres_grave",
+    },
+    {
+      nom_ar: "تشهير",
+      nom_en: "Defamation",
+      description_ar: "نشر معلومات كاذبة تضر بسمعة الآخرين.",
+      description_en: "Spreading false information that harms others' reputation.",
+      gravite: "grave",
+    },
+    {
+      nom_ar: "تعطيل بيداغوجي",
+      nom_en: "Pedagogical Disruption",
+      description_ar: "تعطيل سير العملية التعليمية عمداً.",
+      description_en: "Deliberately disrupting the educational process.",
+      gravite: "grave",
+    },
+    {
+      nom_ar: "سرقة واختلاس",
+      nom_en: "Theft and Misappropriation",
+      description_ar: "سرقة ممتلكات المؤسسة أو اختلاس أموال.",
+      description_en: "Theft of institutional property or embezzlement of funds.",
+      gravite: "tres_grave",
+    },
+    {
+      nom_ar: "تدهور الممتلكات",
+      nom_en: "Property Deterioration",
+      description_ar: "إتلاف أو تخريب ممتلكات المؤسسة عمداً.",
+      description_en: "Deliberate damage or destruction of institutional property.",
+      gravite: "grave",
+    },
+    {
+      nom_ar: "إهانات للموظفين/الطلاب",
+      nom_en: "Insults to Staff/Students",
+      description_ar: "إهانة أو سب الموظفين أو الطلاب.",
+      description_en: "Insulting or verbally abusing staff or students.",
+      gravite: "grave",
+    },
+    {
+      nom_ar: "رفض الرقابة التنظيمية",
+      nom_en: "Regulatory Control Refusal",
+      description_ar: "رفض الامتثال للرقابة الإدارية أو الأمنية.",
+      description_en: "Refusal to comply with administrative or security oversight.",
+      gravite: "grave",
+    },
+  ];
+
+  const ensureInfraction = async (item: {
+    nom_ar: string;
+    nom_en: string;
+    description_ar: string;
+    description_en: string;
+    gravite: string;
+  }) => {
+    const existing = await prisma.infraction.findFirst({
+      where: {
+        OR: [
+          { nom_ar: item.nom_ar },
+          { nom_en: item.nom_en },
+        ],
+      },
+      select: { id: true },
+    });
+    if (existing) return;
+
+    await prisma.infraction.create({
+      data: {
+        nom_ar: item.nom_ar,
+        nom_en: item.nom_en,
+        description_ar: item.description_ar,
+        description_en: item.description_en,
+        gravite: item.gravite as any,
+      },
+    });
+  };
+
+  for (const item of defaultInfractions) {
+    await ensureInfraction(item);
+  }
+  console.log("✅ Disciplinary infractions seeded");
+
+  // ── Disciplinary decisions ────────────────────────────────────────────
+  const defaultDecisions = [
+    {
+      nom_ar: "تنبيه شفهي",
+      nom_en: "Verbal Warning",
+      description_ar: "تحذير شفهي للطالب.",
+      description_en: "Verbal warning to the student.",
+      niveauSanction: "avertissement",
+    },
+    {
+      nom_ar: "تنبيه كتابي",
+      nom_en: "Written Warning",
+      description_ar: "تحذير كتابي رسمي للطالب.",
+      description_en: "Formal written warning to the student.",
+      niveauSanction: "avertissement",
+    },
+    {
+      nom_ar: "تسجيل اللوم في الملف",
+      nom_en: "Blame on File",
+      description_ar: "تسجيل اللوم في الملف التأديبي للطالب.",
+      description_en: "Recording of blame in the student's disciplinary file.",
+      niveauSanction: "blame",
+    },
+    {
+      nom_ar: "صفر في الامتحان (للغش فقط)",
+      nom_en: "Zero on Exam (fraud only)",
+      description_ar: "منح علامة صفر في الامتحان بسبب الغش.",
+      description_en: "Awarding zero marks on the exam due to fraud.",
+      niveauSanction: "suspension",
+    },
+    {
+      nom_ar: "استبعاد من الوحدة",
+      nom_en: "Module Exclusion",
+      description_ar: "استبعاد من وحدة دراسية معينة.",
+      description_en: "Exclusion from a specific study module.",
+      niveauSanction: "suspension",
+    },
+    {
+      nom_ar: "استبعاد من الفصل الدراسي",
+      nom_en: "Semester Exclusion",
+      description_ar: "استبعاد من الفصل الدراسي الحالي.",
+      description_en: "Exclusion from the current semester.",
+      niveauSanction: "suspension",
+    },
+    {
+      nom_ar: "استبعاد من السنة الدراسية",
+      nom_en: "Year Exclusion",
+      description_ar: "استبعاد من السنة الدراسية الحالية.",
+      description_en: "Exclusion from the current academic year.",
+      niveauSanction: "exclusion",
+    },
+    {
+      nom_ar: "استبعاد لمدة سنتين",
+      nom_en: "Two-Year Exclusion",
+      description_ar: "استبعاد من المؤسسة لمدة سنتين.",
+      description_en: "Exclusion from the institution for two years.",
+      niveauSanction: "exclusion",
+    },
+    {
+      nom_ar: "استبعاد نهائي من المؤسسة",
+      nom_en: "Institution-Wide Exclusion",
+      description_ar: "استبعاد نهائي ودائم من المؤسسة.",
+      description_en: "Permanent and definitive exclusion from the institution.",
+      niveauSanction: "exclusion",
+    },
+  ];
+
+  const ensureDecision = async (item: {
+    nom_ar: string;
+    nom_en: string;
+    description_ar: string;
+    description_en: string;
+    niveauSanction: string;
+  }) => {
+    const existing = await prisma.decision.findFirst({
+      where: {
+        OR: [
+          { nom_ar: item.nom_ar },
+          { nom_en: item.nom_en },
+        ],
+      },
+      select: { id: true },
+    });
+    if (existing) return;
+
+    await prisma.decision.create({
+      data: {
+        nom_ar: item.nom_ar,
+        nom_en: item.nom_en,
+        description_ar: item.description_ar,
+        description_en: item.description_en,
+        niveauSanction: item.niveauSanction as any,
+      },
+    });
+  };
+
+  for (const item of defaultDecisions) {
+    await ensureDecision(item);
+  }
+  console.log("✅ Disciplinary decision catalog seeded");
 
   console.log("✅ Default document types ensured");
 

@@ -9,6 +9,19 @@ const ADMIN_ROLE = "admin";
 const MIN_ADDITIONAL_COUNCIL_MEMBERS = 2;
 const MAX_ADDITIONAL_COUNCIL_MEMBERS = 2;
 
+type DossierSignalantRow = {
+  id: number;
+  status: string;
+  enseignantSignalant: number | null;
+  conseilId: number | null;
+};
+
+type ConseilMemberRow = {
+  id: number;
+  enseignantId: number;
+  role: string;
+};
+
 const normalizeRole = (role: string) => String(role || "").trim().toLowerCase();
 
 const callerIsAdmin = (req: AuthRequest): boolean =>
@@ -83,6 +96,37 @@ const conseilInclude = {
 };
 
 /* ════════════════════════════════════════════════════════════════
+   TRANSFORMATION HELPERS
+   ════════════════════════════════════════════════════════════════ */
+
+/**
+ * Transform decision object to frontend-compatible format
+ * Maps nom_ar/nom_en to verdict, description_ar/en to details
+ */
+const transformDecision = (decision: any) => {
+  if (!decision) return null;
+  return {
+    id: decision.id,
+    verdict: decision.nom_en || decision.nom_ar,
+    details: decision.description_en || decision.description_ar,
+    niveauSanction: decision.niveauSanction,
+  };
+};
+
+/**
+ * Transform dossier to include formatted decision
+ */
+const transformDossier = (dossier: any) => ({
+  ...dossier,
+  decision: transformDecision(dossier.decision),
+});
+
+/**
+ * Transform array of dossiers
+ */
+const transformDossiers = (dossiers: any[]) => dossiers.map(transformDossier);
+
+/* ════════════════════════════════════════════════════════════════
    DOSSIER DISCIPLINAIRE HANDLERS
    ════════════════════════════════════════════════════════════════ */
 
@@ -143,7 +187,7 @@ export const listDossiersHandler = async (req: AuthRequest, res: Response, next:
       orderBy: { dateSignal: "desc" },
     });
 
-    res.json({ success: true, data: dossiers });
+    res.json({ success: true, data: transformDossiers(dossiers) });
   } catch (error) {
     next(error);
   }
@@ -174,7 +218,23 @@ export const getDossierHandler = async (req: AuthRequest, res: Response, next: N
 
     const dossier = await prisma.dossierDisciplinaire.findUnique({
       where: { id: Number(req.params.id) },
-      include: dossierInclude,
+      include: {
+        ...dossierInclude,
+        conseil: {
+          include: {
+            membres: {
+              include: {
+                enseignant: {
+                  include: {
+                    user: { select: { nom: true, prenom: true } },
+                    grade: { select: { id: true, nom_ar: true, nom_en: true } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
     });
 
     if (!dossier) {
@@ -182,15 +242,56 @@ export const getDossierHandler = async (req: AuthRequest, res: Response, next: N
       return;
     }
 
+    // If not admin, verify access
     if (!isAdmin && callerEnseignantId && dossier.enseignantSignalant !== callerEnseignantId) {
-      res.status(403).json({
-        success: false,
-        error: { message: "Accès refusé à ce dossier." },
-      });
-      return;
+      // Check if user is a member of the related conseil
+      if (dossier.conseilId) {
+        const isMember = dossier.conseil?.membres.some((m: any) => m.enseignantId === callerEnseignantId);
+        if (!isMember) {
+          res.status(403).json({
+            success: false,
+            error: { message: "Accès refusé à ce dossier." },
+          });
+          return;
+        }
+      } else {
+        // Dossier not attached to any conseil and user is not the reporter
+        res.status(403).json({
+          success: false,
+          error: { message: "Accès refusé à ce dossier." },
+        });
+        return;
+      }
     }
 
-    res.json({ success: true, data: dossier });
+    // Determine access control for the related conseil if present
+    let conseilAccessControl = null;
+    if (dossier.conseil) {
+      const userMember = dossier.conseil.membres.find((m: any) => m.enseignantId === callerEnseignantId);
+      const isPresident = userMember?.role === "president";
+      const canMakeDecisions = isAdmin || isPresident;
+
+      conseilAccessControl = {
+        isAdmin,
+        isPresident,
+        canMakeDecisions,
+        isViewOnly: !canMakeDecisions && (isAdmin || callerEnseignantId),
+        userRole: userMember?.role || (isAdmin ? "admin" : null),
+      };
+    }
+
+    // Add access control metadata to response
+    const responseData = transformDossier({
+      ...dossier,
+      conseil: dossier.conseil
+        ? {
+            ...dossier.conseil,
+            _accessControl: conseilAccessControl,
+          }
+        : null,
+    });
+
+    res.json({ success: true, data: responseData });
   } catch (error) {
     next(error);
   }
@@ -291,13 +392,7 @@ export const createDossierHandler = async (req: AuthRequest, res: Response, next
     }
 
     const descriptionToUse = descriptionSignal || description || reason || titre || "";
-    if (!descriptionToUse.trim()) {
-      res.status(400).json({
-        success: false,
-        error: { message: "Une raison (description) est obligatoire pour signaler un dossier." },
-      });
-      return;
-    }
+    // Note: Description is now optional. The violation type (infraction) is the main reason.
 
     // Create dossiers for each student
     const dossiers = await Promise.all(
@@ -319,7 +414,7 @@ export const createDossierHandler = async (req: AuthRequest, res: Response, next
     );
 
     // Return first if single, array if multiple
-    const result = studentIdsArray.length === 1 ? dossiers[0] : dossiers;
+    const result = studentIdsArray.length === 1 ? transformDossier(dossiers[0]) : transformDossiers(dossiers);
 
     res.status(201).json({ success: true, data: result });
   } catch (error) {
@@ -331,10 +426,21 @@ export const createDossierHandler = async (req: AuthRequest, res: Response, next
  * PATCH /api/v1/cd/dossiers-disciplinaires/:id
  * PATCH /api/v1/cd/cases/:id
  * Update a disciplinary dossier
+ * Note: Only admin can change status. Teachers cannot change status manually.
  */
-export const updateDossierHandler = async (req: Request, res: Response, next: NextFunction) => {
+export const updateDossierHandler = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const { status, decisionId, remarqueDecision, dateDecision, conseilId, description } = req.body;
+    const isAdmin = callerIsAdmin(req);
+
+    // Only admin can change status
+    if (status !== undefined && !isAdmin) {
+      res.status(403).json({
+        success: false,
+        error: { message: "Seul un administrateur peut modifier le statut d'un dossier." },
+      });
+      return;
+    }
 
     const dossier = await prisma.dossierDisciplinaire.update({
       where: { id: Number(req.params.id) },
@@ -359,7 +465,7 @@ export const updateDossierHandler = async (req: Request, res: Response, next: Ne
       include: dossierInclude,
     });
 
-    res.json({ success: true, data: dossier });
+    res.json({ success: true, data: transformDossier(dossier) });
   } catch (error) {
     next(error);
   }
@@ -477,7 +583,13 @@ export const listConseilsHandler = async (req: AuthRequest, res: Response, next:
       orderBy: { dateReunion: "desc" },
     });
 
-    res.json({ success: true, data: conseils });
+    // Transform dossiers in conseils to include formatted decisions
+    const transformedConseils = conseils.map((conseil: any) => ({
+      ...conseil,
+      dossiers: transformDossiers(conseil.dossiers),
+    }));
+
+    res.json({ success: true, data: transformedConseils });
   } catch (error) {
     next(error);
   }
@@ -487,8 +599,25 @@ export const listConseilsHandler = async (req: AuthRequest, res: Response, next:
  * GET /api/v1/cd/conseils/:id
  * Get a single conseil by ID
  */
-export const getConseilHandler = async (req: Request, res: Response, next: NextFunction) => {
+export const getConseilHandler = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
+    if (!req.user?.id) {
+      res.status(401).json({ success: false, error: { message: "Authentification requise." } });
+      return;
+    }
+
+    const isAdmin = callerIsAdmin(req);
+    const callerEnseignantId = isAdmin ? null : await getCallerEnseignantId(req.user.id);
+
+    // Non-admins must be a member of the conseil
+    if (!isAdmin && !callerEnseignantId) {
+      res.status(403).json({
+        success: false,
+        error: { message: "Accès refusé: profil enseignant introuvable." },
+      });
+      return;
+    }
+
     const conseil = await prisma.conseilDisciplinaire.findUnique({
       where: { id: Number(req.params.id) },
       include: conseilInclude,
@@ -499,7 +628,45 @@ export const getConseilHandler = async (req: Request, res: Response, next: NextF
       return;
     }
 
-    res.json({ success: true, data: conseil });
+    // Check if user is a member or admin
+    const isMember = isAdmin || conseil.membres.some((m: any) => m.enseignantId === callerEnseignantId);
+    
+    if (!isMember) {
+      res.status(403).json({
+        success: false,
+        error: { message: "Accès refusé à ce conseil." },
+      });
+      return;
+    }
+
+    // Determine user's role and permissions
+    const userMember = conseil.membres.find((m: any) => m.enseignantId === callerEnseignantId);
+    const isPresident = userMember?.role === "president";
+    const canMakeDecisions = isAdmin || isPresident;
+
+    // Add access control metadata to dossiers
+    const dossiersWithAccess = conseil.dossiers.map((dossier: any) => ({
+      ...transformDossier(dossier),
+      _accessControl: {
+        canMakeDecisions,
+        isViewOnly: !canMakeDecisions,
+      },
+    }));
+
+    // Add access control metadata to response
+    const responseData = {
+      ...conseil,
+      dossiers: dossiersWithAccess,
+      _accessControl: {
+        isAdmin,
+        isPresident,
+        canMakeDecisions,
+        isViewOnly: !canMakeDecisions && isMember,
+        userRole: userMember?.role || (isAdmin ? "admin" : null),
+      },
+    };
+
+    res.json({ success: true, data: responseData });
   } catch (error) {
     next(error);
   }
@@ -586,7 +753,7 @@ export const createConseilHandler = async (req: AuthRequest, res: Response, next
       return;
     }
 
-    const ineligible = dossiers.find((d) => d.status !== "signale" || d.conseilId !== null);
+    const ineligible = dossiers.find((d: DossierSignalantRow) => d.status !== "signale" || d.conseilId !== null);
     if (ineligible) {
       res.status(409).json({
         success: false,
@@ -595,8 +762,8 @@ export const createConseilHandler = async (req: AuthRequest, res: Response, next
       return;
     }
 
-    const reporters = Array.from(
-      new Set(dossiers.map((d) => d.enseignantSignalant).filter((id): id is number => Number.isInteger(id) && id! > 0))
+    const reporters: number[] = Array.from(
+      new Set(dossiers.map((d: DossierSignalantRow) => d.enseignantSignalant).filter((id: unknown): id is number => typeof id === "number" && Number.isInteger(id) && id > 0))
     );
 
     if (reporters.length !== 1) {
@@ -640,7 +807,7 @@ export const createConseilHandler = async (req: AuthRequest, res: Response, next
       return;
     }
 
-    const conseil = await prisma.$transaction(async (tx) => {
+    const conseil = await prisma.$transaction(async (tx: any) => {
       const newConseil = await tx.conseilDisciplinaire.create({
         data: {
           dateReunion: new Date(dateReunion),
@@ -675,7 +842,13 @@ export const createConseilHandler = async (req: AuthRequest, res: Response, next
       });
     });
 
-    res.status(201).json({ success: true, data: conseil });
+    // Transform dossiers to include formatted decisions
+    const transformedConseil = {
+      ...conseil,
+      dossiers: transformDossiers(conseil.dossiers),
+    };
+
+    res.status(201).json({ success: true, data: transformedConseil });
   } catch (error) {
     next(error);
   }
@@ -727,11 +900,11 @@ export const updateConseilHandler = async (req: Request, res: Response, next: Ne
 
     const { dateReunion, heure, lieu, anneeUniversitaire, description, status, presidentId, membres } = req.body;
 
-    const reporters = Array.from(
+    const reporters: number[] = Array.from(
       new Set(
         existing.dossiers
-          .map((d) => d.enseignantSignalant)
-          .filter((id): id is number => typeof id === "number" && Number.isInteger(id) && id > 0)
+          .map((d: { enseignantSignalant: number | null }) => d.enseignantSignalant)
+          .filter((id: unknown): id is number => typeof id === "number" && Number.isInteger(id) && id > 0)
       )
     );
 
@@ -749,7 +922,7 @@ export const updateConseilHandler = async (req: Request, res: Response, next: Ne
     }
 
     const rapporteurEnseignantId = reporters[0];
-    const currentPresident = existing.membres.find((m) => m.role === "president");
+    const currentPresident = existing.membres.find((m: ConseilMemberRow) => m.role === "president");
     const nextPresidentIdCandidate =
       presidentId !== undefined && presidentId !== null
         ? Number(presidentId)
@@ -782,11 +955,11 @@ export const updateConseilHandler = async (req: Request, res: Response, next: Ne
           .map((m: { enseignantId?: unknown } | number) =>
             Number(typeof m === "object" && m !== null ? m.enseignantId : m)
           )
-          .filter((id) => Number.isInteger(id) && id > 0)
+          .filter((id: number) => Number.isInteger(id) && id > 0)
       : existing.membres
-          .filter((m) => m.role === "membre")
-          .map((m) => m.enseignantId)
-          .filter((id) => Number.isInteger(id) && id > 0);
+          .filter((m: ConseilMemberRow) => m.role === "membre")
+          .map((m: ConseilMemberRow) => m.enseignantId)
+          .filter((id: number) => Number.isInteger(id) && id > 0);
 
     if (
       additionalMemberIds.length < MIN_ADDITIONAL_COUNCIL_MEMBERS
@@ -820,7 +993,7 @@ export const updateConseilHandler = async (req: Request, res: Response, next: Ne
 
     const shouldReplaceMembers = presidentId !== undefined || Array.isArray(membres);
 
-    const conseil = await prisma.$transaction(async (tx) => {
+    const conseil = await prisma.$transaction(async (tx: any) => {
       await tx.conseilDisciplinaire.update({
         where: { id: conseilId },
         data: {
@@ -858,7 +1031,13 @@ export const updateConseilHandler = async (req: Request, res: Response, next: Ne
       });
     });
 
-    res.json({ success: true, data: conseil });
+    // Transform dossiers to include formatted decisions
+    const transformedConseil = {
+      ...conseil,
+      dossiers: transformDossiers(conseil.dossiers),
+    };
+
+    res.json({ success: true, data: transformedConseil });
   } catch (error) {
     next(error);
   }
@@ -894,7 +1073,7 @@ export const deleteConseilHandler = async (req: Request, res: Response, next: Ne
       return;
     }
 
-    await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(async (tx: any) => {
       // Defensive cleanup at SQL level to avoid FK RESTRICT races on legacy data.
       await tx.$executeRaw`
         DELETE FROM "membres_conseil"
@@ -942,10 +1121,10 @@ export const finaliserConseilHandler = async (req: AuthRequest, res: Response, n
     const { drafts } = req.body as {
       drafts?: Array<{
         caseId: number;
-        decision: string;
+        decision?: string;
+        decisionId?: number | string;
         sanctions?: string;
         dateDecision?: string;
-        status?: string;
       }>;
     };
 
@@ -963,8 +1142,8 @@ export const finaliserConseilHandler = async (req: AuthRequest, res: Response, n
       return;
     }
 
-    await prisma.$transaction(async (tx) => {
-      // Update conseil status
+    await prisma.$transaction(async (tx: any) => {
+      // Transition conseil to "jugement" first if still planned, then to "termine" when finalizing
       await tx.conseilDisciplinaire.update({
         where: { id: conseilId },
         data: { status: "termine" },
@@ -973,32 +1152,56 @@ export const finaliserConseilHandler = async (req: AuthRequest, res: Response, n
       // Process each decision
       if (Array.isArray(drafts) && drafts.length > 0) {
         for (const d of drafts) {
-          // Create decision record
-          const decisionRecord = await tx.decision.create({
-            data: {
-              nom_ar: d.decision,
-              nom_en: d.decision,
-              description_ar: d.sanctions,
-              description_en: d.sanctions,
-            },
-          });
+          let decisionRecord = null as any;
 
-          // Update dossier with decision
+          if (d.decisionId) {
+            decisionRecord = await tx.decision.findUnique({
+              where: { id: Number(d.decisionId) },
+            });
+          }
+
+          if (!decisionRecord && d.decision) {
+            decisionRecord = await tx.decision.findFirst({
+              where: {
+                OR: [
+                  { nom_ar: d.decision },
+                  { nom_en: d.decision },
+                ],
+              },
+            });
+          }
+
+          if (!decisionRecord && d.decision) {
+            decisionRecord = await tx.decision.create({
+              data: {
+                nom_ar: d.decision,
+                nom_en: d.decision,
+                description_ar: d.sanctions,
+                description_en: d.sanctions,
+              },
+            });
+          }
+
+          if (!decisionRecord) {
+            continue;
+          }
+
+          // Update dossier with decision - always set status to "traite" (treated/closed) when finalizing
           await tx.dossierDisciplinaire.update({
             where: { id: d.caseId },
             data: {
               decisionId: decisionRecord.id,
-              remarqueDecision_ar: d.sanctions,
-              remarqueDecision_en: d.sanctions,
+              remarqueDecision_ar: d.sanctions || "",
+              remarqueDecision_en: d.sanctions || "",
               dateDecision: d.dateDecision ? new Date(d.dateDecision) : new Date(),
-              status: (d.status || "traite") as "signale" | "en_instruction" | "jugement" | "traite",
+              status: "traite",
             },
           });
         }
       }
     });
 
-    res.json({ success: true, message: "Conseil finalisé." });
+    res.json({ success: true, message: "Conseil finalisé et décisions enregistrées." });
   } catch (error) {
     next(error);
   }
@@ -1073,11 +1276,11 @@ export const addMembreHandler = async (req: Request, res: Response, next: NextFu
       return;
     }
 
-    const reporters = Array.from(
+    const reporters: number[] = Array.from(
       new Set(
         existingConseil.dossiers
-          .map((d) => d.enseignantSignalant)
-          .filter((id): id is number => typeof id === "number" && Number.isInteger(id) && id > 0)
+          .map((d: { enseignantSignalant: number | null }) => d.enseignantSignalant)
+          .filter((id: unknown): id is number => typeof id === "number" && Number.isInteger(id) && id > 0)
       )
     );
 
@@ -1113,7 +1316,7 @@ export const addMembreHandler = async (req: Request, res: Response, next: NextFu
     }
 
     const hasRapporteur = existingConseil.membres.some(
-      (m) => m.role === "rapporteur" && m.enseignantId === rapporteurEnseignantId
+      (m: ConseilMemberRow) => m.role === "rapporteur" && m.enseignantId === rapporteurEnseignantId
     );
 
     const currentMembers = hasRapporteur
@@ -1123,7 +1326,7 @@ export const addMembreHandler = async (req: Request, res: Response, next: NextFu
           { id: -1, enseignantId: rapporteurEnseignantId, role: "rapporteur" as const },
         ];
 
-    if (currentMembers.some((m) => m.enseignantId === enseignantId)) {
+    if (currentMembers.some((m: ConseilMemberRow) => m.enseignantId === enseignantId)) {
       res.status(409).json({
         success: false,
         error: { message: "Cet enseignant est déjà membre du conseil." },
@@ -1131,7 +1334,7 @@ export const addMembreHandler = async (req: Request, res: Response, next: NextFu
       return;
     }
 
-    if (normalizedRole === "president" && currentMembers.some((m) => m.role === "president")) {
+    if (normalizedRole === "president" && currentMembers.some((m: ConseilMemberRow) => m.role === "president")) {
       res.status(409).json({
         success: false,
         error: { message: "Ce conseil a déjà un président." },
@@ -1141,7 +1344,7 @@ export const addMembreHandler = async (req: Request, res: Response, next: NextFu
 
     if (
       normalizedRole === "membre"
-      && currentMembers.filter((m) => m.role === "membre").length >= MAX_ADDITIONAL_COUNCIL_MEMBERS
+      && currentMembers.filter((m: ConseilMemberRow) => m.role === "membre").length >= MAX_ADDITIONAL_COUNCIL_MEMBERS
     ) {
       res.status(409).json({
         success: false,
@@ -1152,7 +1355,7 @@ export const addMembreHandler = async (req: Request, res: Response, next: NextFu
       return;
     }
 
-    const membre = await prisma.$transaction(async (tx) => {
+    const membre = await prisma.$transaction(async (tx: any) => {
       if (!hasRapporteur) {
         await tx.membreConseil.create({
           data: {
@@ -1205,6 +1408,84 @@ export const removeMembreHandler = async (req: Request, res: Response, next: Nex
     });
     res.json({ success: true, message: "Membre supprimé du conseil." });
   } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * GET /api/v1/cd/conseils/:cid/available-members?q=search_query
+ * Get available teachers for a conseil (not already members)
+ * Search by name or grade
+ */
+export const getAvailableMembersHandler = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const conseilId = Number(req.params.cid);
+    const { q } = req.query;
+    const searchQuery = String(q || "").trim().toLowerCase();
+
+    if (!conseilId) {
+      res.status(400).json({
+        success: false,
+        error: { message: "Conseil ID est obligatoire." },
+      });
+      return;
+    }
+
+    // Get existing members of the conseil
+    const existingMembers = await prisma.membreConseil.findMany({
+      where: { conseilId },
+      select: { enseignantId: true },
+    });
+
+    const existingMemberIds = existingMembers.map((m) => m.enseignantId);
+
+    // Build search filter
+    const whereCondition = {
+      id: { notIn: existingMemberIds },
+      ...(searchQuery && searchQuery.length >= 2
+        ? {
+            OR: [
+              { user: { nom: { contains: searchQuery, mode: "insensitive" as const } } },
+              { user: { prenom: { contains: searchQuery, mode: "insensitive" as const } } },
+              { grade: { nom_ar: { contains: searchQuery, mode: "insensitive" as const } } },
+              { grade: { nom_en: { contains: searchQuery, mode: "insensitive" as const } } },
+            ],
+          }
+        : {}),
+    };
+
+    const availableTeachers = await prisma.enseignant.findMany({
+      where: whereCondition,
+      select: {
+        id: true,
+        user: {
+          select: {
+            nom: true,
+            prenom: true,
+            email: true,
+          },
+        },
+        grade: {
+          select: {
+            id: true,
+            nom_ar: true,
+            nom_en: true,
+          },
+        },
+      },
+      orderBy: [{ user: { nom: "asc" } }, { user: { prenom: "asc" } }],
+      take: 20,
+    });
+
+    const formatted = availableTeachers.map((t: any) => ({
+      id: t.id,
+      name: [t.user.prenom, t.user.nom].filter(Boolean).join(" ").trim(),
+      email: t.user.email,
+      grade: t.grade?.nom_en || t.grade?.nom_ar || "Staff",
+    }));
+
+    res.json({ success: true, data: formatted });
+  } catch (error: any) {
     next(error);
   }
 };
@@ -1576,7 +1857,7 @@ export const listDisciplineStudentsHandler = async (req: Request, res: Response,
       take: 50,
     });
 
-    const formatted = students.map((s) => ({
+    const formatted = students.map((s: { id: number; matricule: string | null; user: { prenom: string; nom: string } }) => ({
       id: s.id,
       matricule: s.matricule,
       fullName: `${s.user.prenom} ${s.user.nom}`,
@@ -1631,8 +1912,8 @@ export const getDisciplineStudentProfileHandler = async (req: Request, res: Resp
         dossiers,
         stats: {
           totalCases: dossiers.length,
-          pendingCases: dossiers.filter((d) => d.status === "signale").length,
-          completedCases: dossiers.filter((d) => d.status === "traite").length,
+          pendingCases: dossiers.filter((d: { status: string }) => d.status === "signale").length,
+          completedCases: dossiers.filter((d: { status: string }) => d.status === "traite").length,
         },
       },
     });
@@ -1763,11 +2044,68 @@ export const listStaffHandler = async (_req: Request, res: Response, next: NextF
       orderBy: { user: { nom: 'asc' } },
     });
 
-    const formatted = staff.map((s) => ({
+    const formatted = staff.map((s: { id: number; user: { nom: string; prenom: string; email: string }; grade: { id: number; nom_ar: string | null; nom_en: string | null } | null }) => ({
       id: s.id,
-      name: [s.user?.prenom, s.user?.nom].filter(Boolean).join(' ').trim(),
-      email: s.user?.email,
+      name: [s.user.prenom, s.user.nom].filter(Boolean).join(' ').trim(),
+      email: s.user.email,
       grade: s.grade?.nom_en || s.grade?.nom_ar || 'Staff',
+    }));
+
+    res.json({ success: true, data: formatted });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * GET /api/v1/cd/staff/search?q=name_or_grade
+ * Search staff by name or grade
+ */
+export const searchStaffHandler = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { q } = req.query;
+    const searchQuery = String(q || "").trim().toLowerCase();
+
+    if (!searchQuery || searchQuery.length < 2) {
+      res.json({ success: true, data: [] });
+      return;
+    }
+
+    const staff = await prisma.enseignant.findMany({
+      where: {
+        OR: [
+          { user: { nom: { contains: searchQuery, mode: "insensitive" } } },
+          { user: { prenom: { contains: searchQuery, mode: "insensitive" } } },
+          { grade: { nom_ar: { contains: searchQuery, mode: "insensitive" } } },
+          { grade: { nom_en: { contains: searchQuery, mode: "insensitive" } } },
+        ],
+      },
+      select: {
+        id: true,
+        user: {
+          select: {
+            nom: true,
+            prenom: true,
+            email: true,
+          },
+        },
+        grade: {
+          select: {
+            id: true,
+            nom_ar: true,
+            nom_en: true,
+          },
+        },
+      },
+      orderBy: [{ user: { nom: "asc" } }, { user: { prenom: "asc" } }],
+      take: 20,
+    });
+
+    const formatted = staff.map((s: any) => ({
+      id: s.id,
+      name: [s.user.prenom, s.user.nom].filter(Boolean).join(" ").trim(),
+      email: s.user.email,
+      grade: s.grade?.nom_en || s.grade?.nom_ar || "Staff",
     }));
 
     res.json({ success: true, data: formatted });

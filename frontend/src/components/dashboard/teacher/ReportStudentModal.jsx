@@ -1,20 +1,48 @@
 import React, { useEffect, useState } from 'react';
+import request from '../../../services/api';
 import { teacherDashboardService } from '../../../services/teacherDashboard';
 
 export default function ReportStudentModal({ student, open, onClose, onSubmitted }) {
   const [reason, setReason] = useState('');
   const [typeInfraction, setTypeInfraction] = useState('');
+  const [infractions, setInfractions] = useState([]);
   const [submitting, setSubmitting] = useState(false);
+  const [loadingInfractions, setLoadingInfractions] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
     if (open) {
       setReason('');
-      setTypeInfraction('moyenne');
+      setTypeInfraction('');
       setError('');
       setSubmitting(false);
     }
   }, [open, student?.id]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    let active = true;
+    setLoadingInfractions(true);
+
+    request('/api/v1/disciplinary/infractions')
+      .then((response) => {
+        if (!active) return;
+        const data = Array.isArray(response?.data) ? response.data : [];
+        setInfractions(data);
+      })
+      .catch(() => {
+        if (!active) return;
+        setInfractions([]);
+      })
+      .finally(() => {
+        if (active) setLoadingInfractions(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [open]);
 
   if (!open || !student) return null;
 
@@ -22,11 +50,6 @@ export default function ReportStudentModal({ student, open, onClose, onSubmitted
 
   const handleSubmit = async (event) => {
     event.preventDefault();
-    const trimmed = reason.trim();
-    if (!trimmed) {
-      setError('Please describe what happened.');
-      return;
-    }
 
     if (!typeInfraction.trim()) {
       setError('Please select an infraction level.');
@@ -36,11 +59,19 @@ export default function ReportStudentModal({ student, open, onClose, onSubmitted
     try {
       setSubmitting(true);
       setError('');
-      await teacherDashboardService.reportStudent({
+      const payload = {
         studentId: student.id,
-        reason: trimmed,
-        typeInfraction: typeInfraction.trim(),
-      });
+        reason: reason.trim(), // Can be empty now
+      };
+
+      const selectedInfractionId = Number(typeInfraction.trim());
+      if (Number.isInteger(selectedInfractionId) && selectedInfractionId > 0) {
+        payload.infractionId = selectedInfractionId;
+      } else {
+        payload.typeInfraction = typeInfraction.trim();
+      }
+
+      await teacherDashboardService.reportStudent(payload);
       onSubmitted?.();
       onClose?.();
     } catch (err) {
@@ -64,7 +95,7 @@ export default function ReportStudentModal({ student, open, onClose, onSubmitted
           </p>
         </header>
 
-        <form onSubmit={handleSubmit} className="px-6 py-4 space-y-4">
+        <form onSubmit={handleSubmit} noValidate className="px-6 py-4 space-y-4">
           <div className="bg-canvas border border-edge-subtle rounded-md p-3">
             <p className="text-xs text-ink-tertiary uppercase tracking-wider font-semibold">
               Student
@@ -92,26 +123,38 @@ export default function ReportStudentModal({ student, open, onClose, onSubmitted
                 required
               >
                 <option value="">Select infraction level...</option>
-                <option value="faible">Faible</option>
-                <option value="moyenne">Moyenne</option>
-                <option value="grave">Grave</option>
-                <option value="tres_grave">Très grave</option>
+                {infractions.length > 0 ? (
+                  infractions.map((infraction) => {
+                    const label = `${infraction.nom_en || infraction.nom_ar} (${infraction.gravite === 'tres_grave' ? 'Très grave' : infraction.gravite})`;
+                    return (
+                      <option key={infraction.id} value={infraction.id}>
+                        {label}
+                      </option>
+                    );
+                  })
+                ) : (
+                  <>
+                    <option value="faible">Faible</option>
+                    <option value="moyenne">Moyenne</option>
+                    <option value="grave">Grave</option>
+                    <option value="tres_grave">Très grave</option>
+                  </>
+                )}
               </select>
             </div>
           </div>
 
           <div>
             <label className="block text-xs font-medium text-ink-secondary mb-1">
-              Reason
+              Additional Details <span className="font-normal text-ink-muted">(Optional)</span>
             </label>
             <textarea
               value={reason}
               onChange={(e) => setReason(e.target.value)}
               rows={5}
               maxLength={2000}
-              placeholder="Describe the incident…"
+              placeholder="Describe the incident... (optional)"
               className="w-full px-3 py-2 text-sm bg-control-bg border border-control-border rounded-md text-ink placeholder:text-ink-muted focus:ring-2 focus:ring-brand/30 focus:border-brand"
-              required
             />
             <p className="text-[11px] text-ink-tertiary mt-1">
               {reason.length}/2000

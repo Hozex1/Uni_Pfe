@@ -12,6 +12,7 @@ import {
   deleteDossierHandler,
   deleteInfractionHandler,
   finaliserConseilHandler,
+  getAvailableMembersHandler,
   getConseilHandler,
   getDecisionHandler,
   getDisciplineStudentProfileHandler,
@@ -26,6 +27,7 @@ import {
   recordDecisionHandler,
   removeMembreHandler,
   scheduleMeetingHandler,
+  searchStaffHandler,
   statsHandler,
   updateConseilHandler,
   updateDecisionHandler,
@@ -83,6 +85,8 @@ router.delete("/decisions/:id", requireAuth, requireRole(adminOnly), deleteDecis
 router.get("/students", requireAuth, requireRole(readRoles), listDisciplineStudentsHandler);
 router.get("/students/:id/profile", requireAuth, requireRole(readRoles), getDisciplineStudentProfileHandler);
 router.get("/staff", requireAuth, requireRole(readRoles), listStaffHandler);
+router.get("/staff/search", requireAuth, requireRole(readRoles), searchStaffHandler);
+router.get("/conseils/:cid/available-members", requireAuth, requireRole(adminOnly), getAvailableMembersHandler);
 
 router.post("/meetings", requireAuth, requireRole(adminOnly), scheduleMeetingHandler);
 router.get("/meetings", requireAuth, requireRole(readRoles), listConseilsHandler);
